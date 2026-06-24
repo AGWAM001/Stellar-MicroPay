@@ -1797,50 +1797,82 @@ export async function fetchNetworkStats(): Promise<NetworkStats> {
 
 // ── Stellar Name Service ──────────────────────────────────────────────────
 
-const snsCache = new Map<string, { address: string; expiresAt: number }>()
-const SNS_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+/** TTL for SNS resolution cache: 10 minutes */
+const SNS_CACHE_TTL_MS = 600_000;
 
 /**
- * Resolves a Stellar name (e.g. alice.xlm) to a Stellar address.
- * Uses Stellar Federation protocol under the hood.
- * Caches results for 10 minutes.
+ * Module-level cache for resolved Stellar names.
+ * Entries expire after {@link SNS_CACHE_TTL_MS}.
+ * Survives across renders; resets on page reload.
+ */
+export const resolvedNameCache = new Map<string, { address: string; expiry: number }>();
+
+/**
+ * Resolves a human-readable Stellar name to a public key (G... address).
+ *
+ * - Accepts federation addresses: `alice*domain.com`
+ * - Accepts `.xlm` shorthand: `alice.xlm` → resolved via `alice*xlm.money`
+ * - Results are cached for 10 minutes in {@link resolvedNameCache}
+ *
+ * @param name - Federation address or `.xlm` shorthand
+ * @returns The resolved Stellar public key (account_id)
+ * @throws {Error} If the name is invalid or cannot be resolved
  */
 export async function resolveStellarName(name: string): Promise<string> {
-  const trimmed = name.trim()
-  
-  // Return as-is if already a valid Stellar address
-  if (isValidStellarAddress(trimmed)) return trimmed
-  
-  // Check cache
-  const cached = snsCache.get(trimmed)
-  if (cached && cached.expiresAt > Date.now()) return cached.address
+  const trimmed = name.trim();
 
-  // Must contain a * for federation (e.g. alice*stellar.org) or end in .xlm
-  let federationAddress = trimmed
-  if (trimmed.endsWith('.xlm')) {
-    // Convert alice.xlm -> alice*stellarnames.org
-    const parts = trimmed.split('.')
-    federationAddress = `${parts[0]}*stellarnames.org`
-  } else if (!trimmed.includes('*')) {
-    throw new Error(`Invalid Stellar name: ${trimmed}`)
+  if (!trimmed) {
+    throw new Error("Name cannot be empty.");
+  }
+
+  // Return as-is if already a valid raw Stellar address
+  if (isValidStellarAddress(trimmed)) return trimmed;
+
+  // Check cache first
+  const cached = resolvedNameCache.get(trimmed);
+  if (cached && cached.expiry > Date.now()) return cached.address;
+
+  // Determine canonical federation address
+  let federationAddress: string;
+  if (trimmed.endsWith(".xlm")) {
+    // alice.xlm → alice*xlm.money (xlm.money is the public SNS resolver for .xlm handles)
+    const localPart = trimmed.slice(0, trimmed.length - 4); // strip ".xlm"
+    if (!localPart) throw new Error(`Invalid .xlm name: "${trimmed}"`);
+    federationAddress = `${localPart}*xlm.money`;
+  } else if (trimmed.includes("*")) {
+    // Standard federation address: alice*domain.com
+    const parts = trimmed.split("*");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(`Invalid federation address format: "${trimmed}". Expected "user*domain.com".`);
+    }
+    federationAddress = trimmed;
+  } else {
+    throw new Error(
+      `Invalid Stellar name: "${trimmed}". Use a federation address (alice*domain.com) or .xlm name (alice.xlm).`
+    );
   }
 
   try {
-    const record = await Federation.Server.resolve(federationAddress)
-    if (!record.account_id) throw new Error('Name resolved but no address found')
-    snsCache.set(trimmed, { address: record.account_id, expiresAt: Date.now() + SNS_CACHE_TTL_MS })
-    return record.account_id
-  } catch (err: any) {
-    throw new Error(`Could not resolve "${trimmed}": ${err.message ?? 'Unknown error'}`)
+    const record = await Federation.Server.resolve(federationAddress);
+    if (!record.account_id) {
+      throw new Error("Name resolved but no Stellar address was returned.");
+    }
+    // Store in cache
+    resolvedNameCache.set(trimmed, { address: record.account_id, expiry: Date.now() + SNS_CACHE_TTL_MS });
+    return record.account_id;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new Error(`Could not resolve "${trimmed}": ${message}`);
   }
 }
 
 /**
- * Returns true if the input looks like a Stellar name (not a raw address)
+ * Returns true if the input looks like a Stellar name (not a raw G... address).
+ * Matches federation addresses (contains `*`) and .xlm shorthand (ends with `.xlm`).
  */
 export function isStellarName(value: string): boolean {
-  const v = value.trim()
-  return v.endsWith('.xlm') || v.includes('*')
+  const v = value.trim();
+  return v.endsWith(".xlm") || v.includes("*");
 }
 
 // ─── Escrow (issue #213) ──────────────────────────────────────────────────────

@@ -668,6 +668,39 @@ export default function SettingsPage({
                 </div>
               </div>
             )}
+
+            {/* ── Your Stellar Name (SNS) ── */}
+            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
+                <svg className="w-5 h-5 text-stellar-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                </svg>
+                Your Stellar Name
+              </h2>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                Register a human-readable name (e.g.{" "}
+                <span className="font-mono text-stellar-400">alice.xlm</span>) that others can use
+                to send you payments instead of your full address.
+              </p>
+
+              <a
+                href="https://xlm.money"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-stellar-500 hover:bg-stellar-600 text-white font-medium rounded-lg transition-colors text-sm"
+              >
+                Register your name on xlm.money
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-500">
+                Already registered? Share your name (e.g.{" "}
+                <span className="font-mono">yourname.xlm</span>) and it will resolve to your Stellar
+                address automatically.
+              </p>
+            </div>
           </div>
         </main>
       </div>
@@ -707,28 +740,7 @@ export default function SettingsPage({
               </button>
             </div>
           </div>
-        
-          {/* ── Stellar Name Service ── */}
-          <div className="card">
-            <h2 className="text-lg font-semibold mb-2">Your Stellar Name</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              Register a human-readable name (e.g. <strong>alice.xlm</strong>) that others can use to send you payments instead of your full address.
-            </p>
-            {publicKey && (
-              <p className="text-xs text-gray-400 mb-4 break-all">
-                Your address: <span className="font-mono">{publicKey}</span>
-              </p>
-            )}
-            <a
-              href="https://stellarnames.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-primary"
-            >
-              Register your name on StellarNames →
-            </a>
-          </div>
-</div>
+        </div>
       )}
     </>
   );
