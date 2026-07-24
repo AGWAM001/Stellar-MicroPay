@@ -305,6 +305,40 @@ export function exportToCSV(payments: PaymentRecord[]): void {
   triggerDownload(csv, filename, "text/csv;charset=utf-8;");
 }
 
+interface TipCSVRecord {
+  timestamp: string;
+  senderPublicKey: string;
+  amount: string;
+  asset: string;
+  memo?: string;
+}
+
+/**
+ * Convert an array of received tips to a CSV string and trigger a browser
+ * file download, for creator bookkeeping (#612).
+ *
+ * Columns: Date, Sender, Amount, Memo
+ */
+export function exportTipsToCSV(tips: TipCSVRecord[]): void {
+  const HEADERS = ["Date", "Sender", "Amount", "Memo"];
+
+  const rows = tips.map((tip) => [
+    csvCell(format(new Date(tip.timestamp), "yyyy-MM-dd HH:mm:ss")),
+    csvCell(tip.senderPublicKey),
+    csvCell(`${tip.amount} ${tip.asset}`),
+    csvCell(tip.memo ?? ""),
+  ]);
+
+  const csv = [
+    HEADERS.map(csvCell).join(","),
+    ...rows.map((r) => r.join(",")),
+  ].join("\r\n");
+
+  const dateStamp = format(new Date(), "yyyy-MM-dd");
+  const filename = `stellar-micropay-tips-${dateStamp}.csv`;
+  triggerDownload(csv, filename, "text/csv;charset=utf-8;");
+}
+
 /**
  * Convert PaymentRecords to pretty-printed JSON and trigger a browser download.
  */

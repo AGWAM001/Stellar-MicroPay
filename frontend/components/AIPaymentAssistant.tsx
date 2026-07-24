@@ -242,29 +242,6 @@ export default function AIPaymentAssistant({
   );
 }
 
-// Floating Assistant Button Component
-interface FloatingAssistantButtonProps {
-  onClick: () => void;
-}
-
-export function FloatingAssistantButton({ onClick }: FloatingAssistantButtonProps) {
-  return (
-    <button
-      onClick={onClick}
-      className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-stellar-500 to-stellar-400 hover:from-stellar-400 hover:to-stellar-300 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group z-40"
-      aria-label="Open AI Payment Assistant"
-    >
-      <SparklesIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
-
-      {/* Tooltip */}
-      <div className="absolute bottom-full right-0 mb-2 px-3 py-1 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-        AI Payment Assistant
-        <div className="absolute top-full right-3 w-2 h-2 bg-slate-800 rotate-45 -mt-1"></div>
-      </div>
-    </button>
-  );
-}
-
 // Icons
 function SparklesIcon({ className }: { className?: string }) {
   return (
