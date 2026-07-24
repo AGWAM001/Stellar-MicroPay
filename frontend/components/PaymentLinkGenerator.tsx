@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import clsx from "clsx";
 import { QRCodeSVG } from "qrcode.react"; // Ensure this is installed
-import { buildPaymentLinkUrl, rememberPaymentLink } from "@/lib/paymentLinks";
+import { buildPaymentLinkUrl, rememberPaymentLink, listPaymentLinks, PaymentLinkRecord } from "@/lib/paymentLinks";
 
 export default function PaymentLinkGenerator() {
   const [destination, setDestination] = useState("");
@@ -11,6 +11,12 @@ export default function PaymentLinkGenerator() {
   const [generatedLink, setGeneratedLink] = useState("");
   const [copied, setCopied] = useState(false);
   const [showQR, setShowQR] = useState(false); // New: QR Toggle
+  
+  // Link history state
+  const [linkHistory, setLinkHistory] = useState<PaymentLinkRecord[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
+  const [sortBy, setSortBy] = useState<"date" | "amount">("date");
 
   const handleGenerate = () => {
     if (!destination || !amount) return;
@@ -34,6 +40,8 @@ export default function PaymentLinkGenerator() {
     rememberPaymentLink(paymentData, url);
     setGeneratedLink(url);
     setCopied(false);
+    // Refresh link history
+    setLinkHistory(listPaymentLinks());
   };
 
   const copyToClipboard = async () => {
@@ -44,6 +52,52 @@ export default function PaymentLinkGenerator() {
     } catch (err) {
       console.error("Failed to copy!", err);
     }
+  };
+
+  // Load link history on mount and when history is shown
+  useEffect(() => {
+    if (showHistory) {
+      setLinkHistory(listPaymentLinks());
+    }
+  }, [showHistory]);
+
+  // Filter and sort link history
+  const filteredHistory = linkHistory
+    .filter((link) => {
+      if (filterStatus === "all") return true;
+      if (filterStatus === "active") return link.status === "pending" || link.status === "redeemed";
+      if (filterStatus === "expired") return link.status === "expired";
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === "date") {
+        return b.createdAt - a.createdAt; // Newest first
+      }
+      if (sortBy === "amount") {
+        const amountA = parseFloat(a.payload.amount);
+        const amountB = parseFloat(b.payload.amount);
+        return amountB - amountA; // Highest amount first
+      }
+      return 0;
+    });
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "pending": return "text-amber-400";
+      case "redeemed": return "text-green-400";
+      case "expired": return "text-red-400";
+      default: return "text-slate-400";
+    }
+  };
+
+  const formatDate = (timestamp: number) => {
+    return new Date(timestamp).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
   };
 
   return (
@@ -156,6 +210,101 @@ export default function PaymentLinkGenerator() {
           </div>
         )}
       </div>
+
+      {/* Link History Section */}
+      <div className="mt-6 pt-6 border-t border-white/10">
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="text-sm text-stellar-400 hover:text-stellar-300 transition-colors flex items-center gap-2"
+        >
+          <HistoryIcon className="w-4 h-4" />
+          {showHistory ? "Hide" : "Show"} Link History ({linkHistory.length})
+        </button>
+
+        {showHistory && (
+          <div className="mt-4 space-y-3">
+            {/* Filter and Sort Controls */}
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-400">Filter:</label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value as "all" | "active" | "expired")}
+                  className="input-field text-xs py-1.5 px-2"
+                >
+                  <option value="all">All</option>
+                  <option value="active">Active</option>
+                  <option value="expired">Expired</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-400">Sort by:</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as "date" | "amount")}
+                  className="input-field text-xs py-1.5 px-2"
+                >
+                  <option value="date">Date</option>
+                  <option value="amount">Amount</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Link List */}
+            {filteredHistory.length === 0 ? (
+              <p className="text-sm text-slate-500">No links found.</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {filteredHistory.map((link) => (
+                  <div
+                    key={link.id}
+                    className="rounded-lg bg-white/5 border border-white/10 p-3 text-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={clsx("text-xs font-semibold uppercase", getStatusColor(link.status))}>
+                            {link.status}
+                          </span>
+                          <span className="text-xs text-slate-500">
+                            {formatDate(link.createdAt)}
+                          </span>
+                        </div>
+                        <p className="text-slate-300 font-semibold">
+                          {link.payload.amount} XLM
+                        </p>
+                        <p className="text-xs text-slate-400 font-mono truncate">
+                          {link.payload.destination.slice(0, 8)}…{link.payload.destination.slice(-6)}
+                        </p>
+                        {link.payload.memo && (
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Memo: {link.payload.memo}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(link.url);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }}
+                        className="text-xs text-stellar-400 hover:text-stellar-300 transition-colors flex-shrink-0"
+                      >
+                        {copied ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                    {link.redeemedTxHash && (
+                      <p className="text-xs text-green-400 mt-1">
+                        Redeemed: {link.redeemedTxHash.slice(0, 8)}…
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -173,6 +322,24 @@ function LinkIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"
+      />
+    </svg>
+  );
+}
+
+function HistoryIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
       />
     </svg>
   );

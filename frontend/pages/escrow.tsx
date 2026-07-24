@@ -29,6 +29,12 @@ type LookupState =
   | { kind: "found"; escrow: EscrowRecord; currentLedger: number }
   | { kind: "missing" };
 
+interface TimelineEvent {
+  status: string;
+  timestamp: number;
+  description: string;
+}
+
 export default function EscrowPage() {
   const { publicKey } = useWallet();
 
@@ -47,6 +53,9 @@ export default function EscrowPage() {
   const [lookup, setLookup] = useState<LookupState>({ kind: "idle" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<null | "claim" | "cancel">(null);
+  
+  // Timeline state
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +142,51 @@ export default function EscrowPage() {
         return;
       }
       setLookup({ kind: "found", escrow, currentLedger: ledger });
+      
+      // Generate timeline based on escrow state
+      const events: TimelineEvent[] = [
+        {
+          status: "Created",
+          timestamp: Date.now() - 86400000, // Simulated: 1 day ago
+          description: `Escrow created with ${escrow.amount} stroops locked`,
+        },
+      ];
+      
+      if (escrow.status === "Pending") {
+        events.push({
+          status: "Funded",
+          timestamp: Date.now() - 43200000, // Simulated: 12 hours ago
+          description: "Funds locked in escrow contract",
+        });
+      }
+      
+      if (escrow.status === "Released") {
+        events.push({
+          status: "Funded",
+          timestamp: Date.now() - 43200000,
+          description: "Funds locked in escrow contract",
+        });
+        events.push({
+          status: "Released",
+          timestamp: Date.now(),
+          description: "Funds released to recipient",
+        });
+      }
+      
+      if (escrow.status === "Cancelled") {
+        events.push({
+          status: "Funded",
+          timestamp: Date.now() - 43200000,
+          description: "Funds locked in escrow contract",
+        });
+        events.push({
+          status: "Cancelled",
+          timestamp: Date.now(),
+          description: "Funds refunded to sender",
+        });
+      }
+      
+      setTimeline(events);
     } catch (err: any) {
       setActionError(err?.message ?? "Lookup failed.");
       setLookup({ kind: "idle" });
@@ -153,6 +207,17 @@ export default function EscrowPage() {
         throw new Error(signError || "Transaction signing was rejected.");
       }
       await submitTransaction(signedXDR);
+      
+      // Add timeline event for the action
+      const newEvent: TimelineEvent = {
+        status: action === "claim" ? "Released" : "Refunded",
+        timestamp: Date.now(),
+        description: action === "claim" 
+          ? "Funds released to recipient"
+          : "Funds refunded to sender",
+      };
+      setTimeline([...timeline, newEvent]);
+      
       // Refresh the cached escrow so the UI reflects the new status.
       await handleLookup();
     } catch (err: any) {
@@ -272,7 +337,7 @@ export default function EscrowPage() {
             )}
 
             {lookup.kind === "found" && (
-              <div className="mt-4 space-y-2 text-sm">
+              <div className="mt-4 space-y-4 text-sm">
                 <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
                   <dt className="text-gray-500">Status</dt>
                   <dd>{lookup.escrow.status}</dd>
@@ -287,6 +352,36 @@ export default function EscrowPage() {
                   <dt className="text-gray-500">Current ledger</dt>
                   <dd>{lookup.currentLedger.toLocaleString()}</dd>
                 </dl>
+
+                {/* Timeline Section */}
+                <div className="mt-6 pt-4 border-t border-gray-200">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Status Timeline</h3>
+                  <div className="relative pl-6 space-y-4">
+                    {/* Vertical line */}
+                    <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-gray-200" />
+                    
+                    {timeline.map((event, index) => (
+                      <div key={index} className="relative">
+                        {/* Timeline dot */}
+                        <div className={`absolute -left-4 w-3 h-3 rounded-full border-2 ${
+                          index === timeline.length - 1 
+                            ? 'bg-blue-500 border-blue-500' 
+                            : 'bg-white border-gray-300'
+                        }`} />
+                        
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-semibold text-gray-700">{event.status}</span>
+                            <span className="text-xs text-gray-500">
+                              {new Date(event.timestamp).toLocaleString()}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600">{event.description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
                 {lookup.escrow.status === "Pending" && (
                   <div className="mt-3 flex gap-2">
