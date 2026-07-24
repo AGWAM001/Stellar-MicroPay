@@ -4,7 +4,7 @@
  */
 
 import type { AppProps } from "next/app";
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect } from "react";
 import Head from "next/head";
 import Navbar from "@/components/Navbar";
 import QuickSendModal from "@/components/QuickSendModal";
@@ -16,6 +16,9 @@ import {
   registerProtocolHandler,
   type URIParseResult,
 } from "@/lib/sep0007";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+// Re-export ThemeContext and useTheme for backward-compat (Navbar still imports from here)
+export { ThemeContext, useTheme } from "@/contexts/ThemeContext";
 import "@/styles/globals.css";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -96,18 +99,6 @@ function InstallBanner() {
   );
 }
 
-interface ThemeContextType {
-  theme: "dark" | "light";
-  toggleTheme: () => void;
-}
-
-export const ThemeContext = createContext<ThemeContextType>({
-  theme: "dark",
-  toggleTheme: () => {},
-});
-
-export const useTheme = () => useContext(ThemeContext);
-
 function AppShell({
   Component,
   pageProps,
@@ -147,22 +138,8 @@ function AppShell({
 }
 
 export default function App({ Component, pageProps }: AppProps) {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [stellarURI, setStellarURI] = useState<URIParseResult | null>(null);
   const [isQuickSendOpen, setIsQuickSendOpen] = useState(false);
-
-  useEffect(() => {
-    const saved = localStorage.getItem("stellar-micropay:theme") as
-      | "dark"
-      | "light"
-      | null;
-    const preferred =
-      saved ??
-      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-
-    setTheme(preferred);
-    document.documentElement.classList.toggle("dark", preferred === "dark");
-  }, []);
 
   useEffect(() => {
     const uriResult = getStellarURIFromURL();
@@ -193,15 +170,8 @@ export default function App({ Component, pageProps }: AppProps) {
     return () => window.removeEventListener("load", registerWorker);
   }, []);
 
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    document.documentElement.classList.toggle("dark", nextTheme === "dark");
-    localStorage.setItem("stellar-micropay:theme", nextTheme);
-  };
-
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeProvider>
       <ToastProvider>
       <WalletProvider>
         <Head>
@@ -252,6 +222,6 @@ export default function App({ Component, pageProps }: AppProps) {
         <ToastContainer />
       </WalletProvider>
       </ToastProvider>
-    </ThemeContext.Provider>
+    </ThemeProvider>
   );
 }
