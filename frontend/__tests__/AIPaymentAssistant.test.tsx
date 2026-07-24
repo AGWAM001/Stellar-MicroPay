@@ -6,7 +6,8 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import AIPaymentAssistant, { FloatingAssistantButton } from '../components/AIPaymentAssistant';
+import AIPaymentAssistant from '../components/AIPaymentAssistant';
+import FloatingAssistantButton from '../components/FloatingAssistantButton';
 
 // Mock fetch for API calls
 global.fetch = jest.fn();

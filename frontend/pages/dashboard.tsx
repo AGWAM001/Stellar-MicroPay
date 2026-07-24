@@ -17,6 +17,7 @@ import { useRouter } from "next/router";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import Head from "next/head";
+import FloatingAssistantButton from "../components/FloatingAssistantButton";
 
 // Dynamic imports for large components to improve initial load (Lighthouse Performance)
 const PaymentLinkGenerator = dynamic(() => import("../components/PaymentLinkGenerator"), { ssr: false });
@@ -28,8 +29,22 @@ const OnboardingTour = dynamic(() => import("../components/OnboardingTour"), { s
 const BatchPaymentForm = dynamic(() => import("../components/BatchPaymentForm"), { ssr: false });
 const QRCodeModal = dynamic(() => import("../components/QRCodeModal"), { ssr: false });
 const CreatorTipsDashboard = dynamic(() => import("../components/CreatorTipsDashboard"), { ssr: false });
-const AIPaymentAssistant = dynamic(() => import("../components/AIPaymentAssistant"), { ssr: false });
 const RecurringPayments = dynamic(() => import("../components/RecurringPayments"), { ssr: false });
+
+// The assistant panel (and its dependencies) should not ship in the initial
+// bundle — it's only ever needed after the user opens the floating button,
+// so it's loaded on demand with a visible loading state (#610).
+const AIPaymentAssistant = dynamic(() => import("../components/AIPaymentAssistant"), {
+  ssr: false,
+  loading: () => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70">
+      <div className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-5 shadow-2xl">
+        <span className="h-5 w-5 animate-spin rounded-full border-2 border-stellar-400 border-t-transparent" />
+        <span className="text-sm text-slate-300">Loading AI Payment Assistant…</span>
+      </div>
+    </div>
+  ),
+});
 
 import {
   ResponsiveContainer,
@@ -189,11 +204,28 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
 
   // AI Payment Assistant state
   const [showAIAssistant, setShowAIAssistant] = useState(false);
+  // Tracks whether the assistant panel has ever been opened — gates mounting
+  // the dynamically-imported panel so its chunk isn't fetched until then (#610).
+  const [assistantLoaded, setAssistantLoaded] = useState(false);
   const [aiPrefillData, setAiPrefillData] = useState<{
     destination: string;
     amount: string;
     memo?: string;
   } | null>(null);
+
+  const handleOpenAIAssistant = () => {
+    setAssistantLoaded(true);
+    setShowAIAssistant(true);
+  };
+
+  const handleAIAssistantConfirm = (intent: { amount: string; recipient: string; memo: string }) => {
+    setAiPrefillData({
+      destination: intent.recipient,
+      amount: intent.amount,
+      memo: intent.memo,
+    });
+    setActivePaymentTab("single");
+  };
 
   // Recurring payments prefill — set when user clicks "Pay Now" on a due schedule
   const [recurringPrefill, setRecurringPrefill] = useState<{
@@ -1261,7 +1293,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
               accountBalances={otherBalances}
               onSuccess={handlePaymentSuccess}
               prefill={
-                recurringPrefill
+                aiPrefillData
+                  ? aiPrefillData
+                  : recurringPrefill
                   ? recurringPrefill
                   : stellarURI && stellarURI.success
                   ? uriToPrefillData(stellarURI.data!)
@@ -1320,6 +1354,15 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         onComplete={handleTourComplete}
         onSkip={handleTourSkip}
       />
+
+      <FloatingAssistantButton onClick={handleOpenAIAssistant} />
+      {assistantLoaded && (
+        <AIPaymentAssistant
+          isOpen={showAIAssistant}
+          onClose={() => setShowAIAssistant(false)}
+          onConfirm={handleAIAssistantConfirm}
+        />
+      )}
     </div>
   );
 }

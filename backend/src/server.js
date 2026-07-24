@@ -7,6 +7,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const pinoHttp = require("pino-http");
 const rateLimit = require("express-rate-limit");
@@ -127,6 +128,10 @@ const helmetOptions = {
 };
 
 app.use(helmet(helmetOptions));
+// gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads
+// before they hit the wire. Must run before routes register their handlers so
+// res.write/res.end get wrapped for every response.
+app.use(compression());
 // Structured JSON request logging (#269) — replaces morgan('dev'); reuses the
 // shared pino logger so HTTP logs are machine-parseable (Datadog/CloudWatch).
 app.use(pinoHttp({ logger }));
