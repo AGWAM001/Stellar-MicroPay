@@ -5,10 +5,10 @@ import "@testing-library/jest-dom";
 import QRCodeModal from "@/components/QRCodeModal";
 
 jest.mock("qrcode.react", () => {
-  const React = require("react");
+  const React = require("react") as typeof import("react");
 
   return {
-    QRCodeCanvas: React.forwardRef<HTMLCanvasElement, Record<string, unknown>>((_, ref) => (
+    QRCodeCanvas: React.forwardRef<HTMLCanvasElement, Record<string, unknown>>((props, ref) => (
       <canvas ref={ref} data-testid="qr-code-canvas" />
     )),
     QRCodeSVG: () => <svg data-testid="qr-code-svg" />,

@@ -765,6 +765,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         }
 
         try {
+          if (!publicKey) {
+            return;
+          }
           const bal = await getXLMBalance(publicKey);
           setXlmBalance(bal);
         } catch {
@@ -828,6 +831,10 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
    * Reference: https://developer.mozilla.org/en-US/docs/Web/API/Push_API
    */
   const subscribeToPush = async (): Promise<boolean> => {
+    if (!publicKey) {
+      return false;
+    }
+
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       showToast('Push notifications are not supported in this browser.');
       return false;
