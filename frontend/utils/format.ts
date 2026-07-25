@@ -42,17 +42,23 @@ export function shortenAddress(address: string, chars = 4): string {
 
 /**
  * Format XLM amount with up to 7 decimal places, trimming trailing zeros.
+ * @param amount - The amount to format
+ * @param locale - The locale for formatting (defaults to 'en-US')
  */
-export function formatXLM(amount: string | number): string {
-  return formatAsset(amount, "XLM");
+export function formatXLM(amount: string | number, locale = 'en-US'): string {
+  return formatAsset(amount, "XLM", locale);
 }
 
 /**
  * Format a Stellar asset amount with asset-specific precision rules.
+ * @param amount - The amount to format
+ * @param assetCode - The asset code (e.g., 'XLM', 'USDC')
+ * @param locale - The locale for formatting (defaults to 'en-US')
  */
 export function formatAsset(
   amount: string | number,
-  assetCode = DEFAULT_ASSET_CODE
+  assetCode = DEFAULT_ASSET_CODE,
+  locale = 'en-US'
 ): string {
   const normalizedAssetCode = normalizeAssetCode(assetCode);
   const rule = getAssetFormatRule(normalizedAssetCode);
@@ -66,7 +72,7 @@ export function formatAsset(
     return `${zeroValue} ${normalizedAssetCode}`;
   }
 
-  return `${num.toLocaleString("en-US", rule)} ${normalizedAssetCode}`;
+  return `${num.toLocaleString(locale, rule)} ${normalizedAssetCode}`;
 }
 
 /**
@@ -226,9 +232,11 @@ export function parseAddressBookCSV(csv: string) {
 
 /**
  * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").
+ * @param usdValue - The USD value to format
+ * @param locale - The locale for formatting (defaults to 'en-US')
  */
-export function formatUSD(usdValue: number): string {
-  return `≈ $${usdValue.toLocaleString("en-US", {
+export function formatUSD(usdValue: number, locale = 'en-US'): string {
+  return `≈ $${usdValue.toLocaleString(locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} USD`;
