@@ -92,6 +92,14 @@ interface PaymentStats {
   sentCount: number;
   receivedCount: number;
   totalTransactions: number;
+  comparison?: {
+    thisWeekCount: number;
+    lastWeekCount: number;
+    countChangePercent: number;
+    thisWeekVolume: string;
+    lastWeekVolume: string;
+    volumeChangePercent: number;
+  };
 }
 
 interface CachedBalanceSnapshot {
@@ -381,35 +389,42 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         headers["Authorization"] = `Bearer ${token}`;
       }
 
-      const response = await fetch(
-        `${apiBase}/api/payments/${encodeURIComponent(publicKey)}/stats`,
-        { headers }
-      );
+      const [resStats, resSummary] = await Promise.all([
+        fetch(`${apiBase}/api/payments/${encodeURIComponent(publicKey)}/stats`, { headers }),
+        fetch(`${apiBase}/api/analytics/${encodeURIComponent(publicKey)}/summary`, { headers })
+      ]);
 
-      if (!response.ok) {
+      if (!resStats.ok) {
         throw new Error("Unable to load payment stats right now.");
       }
 
-      const payload = await response.json();
-      const data = payload?.data;
+      const payloadStats = await resStats.json();
+      const dataStats = payloadStats?.data;
+
+      let comparisonData;
+      if (resSummary.ok) {
+        const payloadSummary = await resSummary.json();
+        comparisonData = payloadSummary?.data?.comparison;
+      }
 
       if (
-        !payload?.success ||
-        !data ||
-        typeof data.totalSentXLM !== "string" ||
-        typeof data.totalReceivedXLM !== "string" ||
-        typeof data.totalTransactions !== "number"
+        !payloadStats?.success ||
+        !dataStats ||
+        typeof dataStats.totalSentXLM !== "string" ||
+        typeof dataStats.totalReceivedXLM !== "string" ||
+        typeof dataStats.totalTransactions !== "number"
       ) {
         throw new Error("Payment stats response was invalid.");
       }
 
       setPaymentStats({
-        publicKey: data.publicKey,
-        totalSentXLM: data.totalSentXLM,
-        totalReceivedXLM: data.totalReceivedXLM,
-        sentCount: Number(data.sentCount ?? 0),
-        receivedCount: Number(data.receivedCount ?? 0),
-        totalTransactions: data.totalTransactions,
+        publicKey: dataStats.publicKey,
+        totalSentXLM: dataStats.totalSentXLM,
+        totalReceivedXLM: dataStats.totalReceivedXLM,
+        sentCount: Number(dataStats.sentCount ?? 0),
+        receivedCount: Number(dataStats.receivedCount ?? 0),
+        totalTransactions: dataStats.totalTransactions,
+        comparison: comparisonData,
       });
     } catch {
       setPaymentStats(null);
@@ -1431,12 +1446,17 @@ function PaymentStatsWidget({
 
   if (!stats) return null;
 
+  const countDelta = stats.comparison?.countChangePercent;
+  const volumeDelta = stats.comparison?.volumeChangePercent;
+
   return (
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
       <StatsCard
         label="Total Sent"
         value={formatStatsXLM(stats.totalSentXLM)}
         helper={`${stats.sentCount} outgoing payment${stats.sentCount === 1 ? "" : "s"}`}
+        delta={volumeDelta}
+        deltaType={typeof volumeDelta === "number" ? (volumeDelta > 0 ? "positive" : volumeDelta < 0 ? "negative" : "neutral") : undefined}
       />
       <StatsCard
         label="Total Received"
@@ -1447,6 +1467,8 @@ function PaymentStatsWidget({
         label="Transactions"
         value={stats.totalTransactions.toLocaleString("en-US")}
         helper="Across sent and received activity"
+        delta={countDelta}
+        deltaType={typeof countDelta === "number" ? (countDelta > 0 ? "positive" : countDelta < 0 ? "negative" : "neutral") : undefined}
       />
     </section>
   );
@@ -1599,15 +1621,32 @@ function StatsCard({
   label,
   value,
   helper,
+  delta,
+  deltaType = "neutral",
 }: {
   label: string;
   value: string;
   helper: string;
+  delta?: number;
+  deltaType?: "positive" | "negative" | "neutral";
 }) {
+  const isPos = deltaType === "positive";
+  const isNeg = deltaType === "negative";
+  const deltaColor = isPos ? "text-emerald-400 bg-emerald-500/10" : isNeg ? "text-rose-400 bg-rose-500/10" : "text-slate-400 bg-slate-500/10";
+  
   return (
-    <div className="card border-white/10 bg-white/[0.03]">
-      <p className="label mb-2">{label}</p>
-      <p className="font-display text-2xl font-bold text-white">{value}</p>
+    <div className="card border-white/10 bg-white/[0.03] relative overflow-hidden flex flex-col justify-between">
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <p className="label">{label}</p>
+          {typeof delta === "number" && (
+            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${deltaColor}`}>
+              {delta >= 0 ? "+" : ""}{delta}%
+            </span>
+          )}
+        </div>
+        <p className="font-display text-2xl font-bold text-white">{value}</p>
+      </div>
       <p className="text-xs text-slate-400 mt-2">{helper}</p>
     </div>
   );

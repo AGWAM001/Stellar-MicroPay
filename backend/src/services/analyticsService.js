@@ -40,7 +40,7 @@ async function withCache(key, fn) {
 
 /**
  * Get summary analytics for a public key.
- * Returns: total sent, total received, unique counterparties, avg transaction size.
+ * Returns: total sent, total received, unique counterparties, avg transaction size, and week-over-week comparison deltas.
  */
 async function getSummary(publicKey) {
   return withCache(`summary:${publicKey}`, async () => {
@@ -51,8 +51,18 @@ async function getSummary(publicKey) {
     const counterparties = new Set();
     let transactionCount = 0;
 
+    const now = Date.now();
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+    const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+
+    let thisWeekCount = 0;
+    let lastWeekCount = 0;
+    let thisWeekVolume = 0;
+    let lastWeekVolume = 0;
+
     for (const payment of payments) {
       const amount = parseFloat(payment.amount);
+      const paymentTime = new Date(payment.createdAt).getTime();
 
       if (payment.type === "sent") {
         totalSent += amount;
@@ -62,11 +72,35 @@ async function getSummary(publicKey) {
         counterparties.add(payment.from);
       }
       transactionCount++;
+
+      // Week-over-week breakdown
+      if (now - paymentTime <= oneWeekMs) {
+        thisWeekCount++;
+        thisWeekVolume += amount;
+      } else if (now - paymentTime <= twoWeeksMs) {
+        lastWeekCount++;
+        lastWeekVolume += amount;
+      }
     }
 
     const totalVolume = totalSent + totalReceived;
     const avgTransactionSize =
       transactionCount > 0 ? (totalVolume / transactionCount).toFixed(7) : "0";
+
+    // Compute percentage deltas
+    let countChangePercent = 0;
+    if (lastWeekCount > 0) {
+      countChangePercent = Math.round(((thisWeekCount - lastWeekCount) / lastWeekCount) * 100);
+    } else if (thisWeekCount > 0) {
+      countChangePercent = 100; // 100% increase if last week was 0
+    }
+
+    let volumeChangePercent = 0;
+    if (lastWeekVolume > 0) {
+      volumeChangePercent = Math.round(((thisWeekVolume - lastWeekVolume) / lastWeekVolume) * 100);
+    } else if (thisWeekVolume > 0) {
+      volumeChangePercent = 100;
+    }
 
     return {
       publicKey,
@@ -75,6 +109,14 @@ async function getSummary(publicKey) {
       uniqueCounterparties: counterparties.size,
       averageTransactionSize: avgTransactionSize,
       totalTransactions: transactionCount,
+      comparison: {
+        thisWeekCount,
+        lastWeekCount,
+        countChangePercent,
+        thisWeekVolume: thisWeekVolume.toFixed(7),
+        lastWeekVolume: lastWeekVolume.toFixed(7),
+        volumeChangePercent,
+      },
     };
   });
 }
@@ -164,6 +206,102 @@ async function getActivityByDay(publicKey) {
   });
 }
 
+const emailService = require("./emailService");
+
+// In-memory store for scheduled exports: Map<publicKey, { email, frequency, nextRunAt }>
+const exportSchedules = new Map();
+
+/**
+ * Opt-in/schedule a recurring email export.
+ */
+function scheduleExport(publicKey, email, frequency) {
+  if (!publicKey || !email || !frequency) {
+    const error = new Error("publicKey, email, and frequency are required");
+    error.status = 400;
+    throw error;
+  }
+  if (!["daily", "weekly"].includes(frequency.toLowerCase())) {
+    const error = new Error("frequency must be 'daily' or 'weekly'");
+    error.status = 400;
+    throw error;
+  }
+
+  const nextRunAt = new Date();
+  if (frequency.toLowerCase() === "daily") {
+    nextRunAt.setUTCDate(nextRunAt.getUTCDate() + 1);
+  } else {
+    nextRunAt.setUTCDate(nextRunAt.getUTCDate() + 7);
+  }
+
+  const schedule = {
+    publicKey,
+    email,
+    frequency: frequency.toLowerCase(),
+    nextRunAt: nextRunAt.toISOString(),
+  };
+
+  exportSchedules.set(publicKey, schedule);
+  return schedule;
+}
+
+/**
+ * Get scheduled export for a public key.
+ */
+function getExportSchedule(publicKey) {
+  return exportSchedules.get(publicKey) || null;
+}
+
+/**
+ * Manually trigger/run the email export for testing or scheduled job runner.
+ */
+async function triggerEmailExport(publicKey) {
+  const schedule = exportSchedules.get(publicKey);
+  if (!schedule) {
+    const error = new Error("No export schedule found for this public key");
+    error.status = 404;
+    throw error;
+  }
+
+  // Fetch summary, top recipients, activity
+  const [summary, topRecipients, activity] = await Promise.all([
+    getSummary(publicKey),
+    getTopRecipients(publicKey),
+    getActivityByDay(publicKey),
+  ]);
+
+  const htmlContent = `
+    <h1>Stellar MicroPay Summary Data Export</h1>
+    <p>PublicKey: <code>${publicKey}</code></p>
+    
+    <h2>Summary Statistics</h2>
+    <ul>
+      <li>Total Sent: ${summary.totalSentXLM} XLM</li>
+      <li>Total Received: ${summary.totalReceivedXLM} XLM</li>
+      <li>Unique Counterparties: ${summary.uniqueCounterparties}</li>
+      <li>Average Transaction Size: ${summary.averageTransactionSize} XLM</li>
+      <li>Total Transactions: ${summary.totalTransactions}</li>
+    </ul>
+
+    <h2>Top Recipients</h2>
+    <ol>
+      ${topRecipients.topRecipients.map(r => `<li><code>${r.address}</code>: ${r.totalXLMSent} XLM</li>`).join("")}
+    </ol>
+
+    <h2>Weekly Activity</h2>
+    <ul>
+      ${activity.activityByDay.map(d => `<li>${d.day}: ${d.transactionCount} payments</li>`).join("")}
+    </ul>
+  `;
+
+  await emailService.sendEmail({
+    to: schedule.email,
+    subject: `Stellar MicroPay Summary Export (${schedule.frequency})`,
+    html: htmlContent,
+  });
+
+  return { success: true };
+}
+
 /**
  * Clear cache for a specific public key (optional helper).
  * Useful for manual cache invalidation if needed.
@@ -179,4 +317,7 @@ module.exports = {
   getTopRecipients,
   getActivityByDay,
   clearCache,
+  scheduleExport,
+  getExportSchedule,
+  triggerEmailExport,
 };
