@@ -286,4 +286,52 @@ describe("Analytics Service", () => {
       expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("Scheduled Email Exports", () => {
+    it("should allow scheduling an export and trigger email", async () => {
+      const schedule = analyticsService.scheduleExport(
+        testPublicKey,
+        "user@example.com",
+        "daily"
+      );
+
+      expect(schedule).toEqual(expect.objectContaining({
+        publicKey: testPublicKey,
+        email: "user@example.com",
+        frequency: "daily"
+      }));
+
+      const retrieved = analyticsService.getExportSchedule(testPublicKey);
+      expect(retrieved).toEqual(schedule);
+    });
+  });
+
+  describe("Top Tippers Leaderboard", () => {
+    it("should aggregate and rank top tippers", () => {
+      const tipsService = require("../src/services/tipsService");
+      // Record some mock tips
+      tipsService.recordTip({
+        senderPublicKey: "GBB11111111111111111111111111111111111111111111111111111111",
+        creatorPublicKey: testPublicKey,
+        amount: "10.5",
+      });
+      tipsService.recordTip({
+        senderPublicKey: "GBB11111111111111111111111111111111111111111111111111111111",
+        creatorPublicKey: testPublicKey,
+        amount: "5.5",
+      });
+      tipsService.recordTip({
+        senderPublicKey: "GBB22222222222222222222222222222222222222222222222222222222",
+        creatorPublicKey: testPublicKey,
+        amount: "25.0",
+      });
+
+      const leaderboard = tipsService.getTopTippers(testPublicKey, 5);
+      expect(leaderboard).toHaveLength(2);
+      expect(leaderboard[0].senderPublicKey).toBe("GBB22222222222222222222222222222222222222222222222222222222");
+      expect(parseFloat(leaderboard[0].totalAmount)).toBe(25.0);
+      expect(leaderboard[1].senderPublicKey).toBe("GBB11111111111111111111111111111111111111111111111111111111");
+      expect(parseFloat(leaderboard[1].totalAmount)).toBe(16.0);
+    });
+  });
 });

@@ -44,4 +44,37 @@ router.get(
   analyticsController.getActivityByDay
 );
 
+/**
+ * POST /api/analytics/:publicKey/export-schedule
+ * Set up recurring email export.
+ */
+router.post(
+  "/:publicKey/export-schedule",
+  strictLimiter,
+  sanitizePublicKey,
+  analyticsController.scheduleExport
+);
+
+/**
+ * GET /api/analytics/:publicKey/export-schedule
+ * Get scheduled export configuration.
+ */
+router.get(
+  "/:publicKey/export-schedule",
+  strictLimiter,
+  sanitizePublicKey,
+  analyticsController.getExportSchedule
+);
+
+/**
+ * POST /api/analytics/:publicKey/export-trigger
+ * Manually trigger sending export email.
+ */
+router.post(
+  "/:publicKey/export-trigger",
+  strictLimiter,
+  sanitizePublicKey,
+  analyticsController.triggerExport
+);
+
 module.exports = router;
