@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check for unused dependencies
+        run: npx depcheck --ignores="@storybook/*,prettier" --ignore-dirs=.next,.storybook
+
       - name: Lint
         run: npm run lint
 
@@ -77,6 +80,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check for unused dependencies
+        run: npx depcheck
 
       - name: Lint
         run: npm run lint
