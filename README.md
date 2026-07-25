@@ -166,6 +166,39 @@ The contract includes comprehensive tests covering:
 4. Deploy to Stellar testnet/mainnet
 5. Initialize contract with required parameters
 
+## Development Commands
+
+Common development tasks can be run using `make` or `npm`:
+
+### Make targets
+```bash
+make dev                 # Start frontend + backend concurrently (hot-reload)
+make test                # Run all tests (frontend + backend unit tests)
+make lint                # Lint frontend + backend code
+make build               # Build Docker images
+make contracts-build     # Build Soroban contracts WASM
+make contracts-test      # Run Soroban contract tests
+```
+
+### NPM scripts
+```bash
+npm run clean            # Remove build artifacts (.next, dist, target)
+npm run load-test        # Run load tests
+npm run prepare          # Install Husky hooks (runs automatically after npm install)
+```
+
+### Commit conventions
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) enforced via commitlint and Husky. Commit messages are automatically validated on commit.
+
+Acceptable types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `revert`
+
+Example:
+```bash
+git commit -m "feat: add streaming payment support"
+git commit -m "fix: correct claim amount calculation"
+```
+
 ## Freighter Setup
 
 New contributors need a funded Stellar testnet account before they can sign and test app flows locally.
