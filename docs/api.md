@@ -519,6 +519,83 @@ Payment counts grouped by day of week (UTC).
 }
 ```
 
+### `GET /api/analytics/:publicKey/cohorts`
+
+Retention-style cohort breakdown showing one-time vs repeat counterparties over time.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| period | string | `month` | Cohort bucket size. Use `week` for weekly buckets. |
+| periods | integer | `6` | Number of buckets to return, capped at 12. |
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "data": {
+    "publicKey": "GABC1234567890123456789012345678901234567890123456789012345",
+    "period": "month",
+    "periods": 6,
+    "range": {
+      "start": "2026-02-01T00:00:00.000Z",
+      "end": "2026-07-31T23:59:59.999Z"
+    },
+    "cohorts": [
+      {
+        "periodStart": "2026-07-01T00:00:00.000Z",
+        "periodEnd": "2026-07-31T23:59:59.999Z",
+        "label": "Jul 2026",
+        "period": "month",
+        "sent": {
+          "paymentCount": 4,
+          "totalXLM": "42.0000000",
+          "counterparties": {
+            "oneTimeCounterparties": 2,
+            "repeatCounterparties": 1,
+            "totalCounterparties": 3
+          }
+        },
+        "received": {
+          "paymentCount": 3,
+          "totalXLM": "18.0000000",
+          "counterparties": {
+            "oneTimeCounterparties": 1,
+            "repeatCounterparties": 1,
+            "totalCounterparties": 2
+          }
+        },
+        "totalCounterparties": 5,
+        "repeatRate": 40
+      }
+    ]
+  }
+}
+```
+
+### `GET /api/analytics/:publicKey/stream`
+
+Server-sent events feed for new payment operations. The dashboard uses this
+stream first and falls back to polling if the connection drops.
+
+**Response `200`** `Content-Type: text/event-stream`
+
+Each event payload is a normalized payment record:
+```json
+{
+  "id": "operation-id",
+  "type": "received",
+  "amount": "10.0000000",
+  "asset": "XLM",
+  "from": "GABC...SENDER",
+  "to": "GXYZ...RECIPIENT",
+  "createdAt": "2025-01-01T12:00:00.000Z",
+  "transactionHash": "abc123...",
+  "pagingToken": "..."
+}
+```
+
 **Errors (all analytics routes)**
 
 | Status | Body |

@@ -206,6 +206,226 @@ async function getActivityByDay(publicKey) {
   });
 }
 
+function normalizeCohortPeriod(period) {
+  return period === "week" ? "week" : "month";
+}
+
+function normalizeCohortPeriodCount(periods) {
+  const parsed = Number.parseInt(String(periods), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 6;
+  }
+  return Math.min(parsed, 12);
+}
+
+function buildCohortBuckets(period, count) {
+  const buckets = [];
+  const anchor = getCohortBucketStart(new Date(), period);
+
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const bucketStart = shiftCohortBucket(anchor, period, -index);
+    buckets.push({
+      bucketStart,
+      bucketEnd: getCohortBucketEnd(bucketStart, period),
+      label: formatCohortBucketLabel(bucketStart, period),
+      sent: {
+        paymentCount: 0,
+        totalXLM: 0,
+        counterparties: new Map(),
+      },
+      received: {
+        paymentCount: 0,
+        totalXLM: 0,
+        counterparties: new Map(),
+      },
+    });
+  }
+
+  return buckets;
+}
+
+function getCohortBucketStart(date, period) {
+  const bucket = new Date(date);
+  bucket.setUTCHours(0, 0, 0, 0);
+
+  if (period === "week") {
+    bucket.setUTCDate(bucket.getUTCDate() - bucket.getUTCDay());
+    return bucket;
+  }
+
+  bucket.setUTCDate(1);
+  return bucket;
+}
+
+function getCohortBucketEnd(bucketStart, period) {
+  const end = new Date(bucketStart);
+
+  if (period === "week") {
+    end.setUTCDate(end.getUTCDate() + 7);
+    end.setUTCMilliseconds(end.getUTCMilliseconds() - 1);
+    return end;
+  }
+
+  end.setUTCMonth(end.getUTCMonth() + 1);
+  end.setUTCMilliseconds(end.getUTCMilliseconds() - 1);
+  return end;
+}
+
+function shiftCohortBucket(bucketStart, period, offset) {
+  const shifted = new Date(bucketStart);
+
+  if (period === "week") {
+    shifted.setUTCDate(shifted.getUTCDate() + offset * 7);
+  } else {
+    shifted.setUTCMonth(shifted.getUTCMonth() + offset);
+  }
+
+  return shifted;
+}
+
+function formatCohortBucketLabel(bucketStart, period) {
+  if (period === "week") {
+    const bucketEnd = getCohortBucketEnd(bucketStart, period);
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const startLabel = formatter.format(bucketStart);
+    const endLabel = formatter.format(bucketEnd);
+    return `${startLabel} - ${endLabel}`;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    year: "numeric",
+  }).format(bucketStart);
+}
+
+function formatCohortBucket(bucket, period) {
+  const sentCounterparties = summarizeCounterparties(bucket.sent.counterparties);
+  const receivedCounterparties = summarizeCounterparties(bucket.received.counterparties);
+
+  return {
+    periodStart: bucket.bucketStart.toISOString(),
+    periodEnd: bucket.bucketEnd.toISOString(),
+    label: bucket.label,
+    sent: {
+      paymentCount: bucket.sent.paymentCount,
+      totalXLM: bucket.sent.totalXLM.toFixed(7),
+      counterparties: sentCounterparties,
+    },
+    received: {
+      paymentCount: bucket.received.paymentCount,
+      totalXLM: bucket.received.totalXLM.toFixed(7),
+      counterparties: receivedCounterparties,
+    },
+    totalCounterparties:
+      sentCounterparties.totalCounterparties + receivedCounterparties.totalCounterparties,
+    repeatRate: calculateRepeatRate(sentCounterparties, receivedCounterparties),
+    period,
+  };
+}
+
+function summarizeCounterparties(counterpartyCounts) {
+  let oneTimeCounterparties = 0;
+  let repeatCounterparties = 0;
+
+  for (const count of counterpartyCounts.values()) {
+    if (count > 1) {
+      repeatCounterparties += 1;
+    } else if (count === 1) {
+      oneTimeCounterparties += 1;
+    }
+  }
+
+  return {
+    oneTimeCounterparties,
+    repeatCounterparties,
+    totalCounterparties: oneTimeCounterparties + repeatCounterparties,
+  };
+}
+
+function calculateRepeatRate(sentCounterparties, receivedCounterparties) {
+  const totalCounterparties =
+    sentCounterparties.totalCounterparties + receivedCounterparties.totalCounterparties;
+
+  if (totalCounterparties === 0) {
+    return 0;
+  }
+
+  const repeatCounterparties =
+    sentCounterparties.repeatCounterparties + receivedCounterparties.repeatCounterparties;
+  return Math.round((repeatCounterparties / totalCounterparties) * 100);
+}
+
+/**
+ * Get retention-style cohort analytics for repeat vs one-time counterparties.
+ *
+ * Each cohort bucket covers one calendar period (month by default). For each
+ * period, counterparties are grouped by how often they appeared in sent and
+ * received payments:
+ * - one-time: exactly one payment in the period
+ * - repeat: two or more payments in the period
+ */
+async function getCohortBreakdown(publicKey, { period = "month", periods = 6 } = {}) {
+  const normalizedPeriod = normalizeCohortPeriod(period);
+  const normalizedCount = normalizeCohortPeriodCount(periods);
+
+  return withCache(`cohorts:${publicKey}:${normalizedPeriod}:${normalizedCount}`, async () => {
+    const payments = await stellarService.getPayments(publicKey, { limit: 200 });
+    const buckets = buildCohortBuckets(normalizedPeriod, normalizedCount);
+    const bucketMap = new Map(buckets.map((bucket) => [bucket.bucketStart.getTime(), bucket]));
+
+    const oldestBucketStart = buckets[0]?.bucketStart ?? null;
+    const newestBucketStart = buckets[buckets.length - 1]?.bucketStart ?? null;
+
+    for (const payment of payments) {
+      const paymentDate = new Date(payment.createdAt);
+      const bucketStart = getCohortBucketStart(paymentDate, normalizedPeriod);
+
+      if (!bucketMap.has(bucketStart.getTime())) {
+        continue;
+      }
+
+      const bucket = bucketMap.get(bucketStart.getTime());
+      const amount = parseFloat(payment.amount);
+      const counterparty = payment.type === "sent" ? payment.to : payment.from;
+
+      if (payment.type === "sent") {
+        bucket.sent.paymentCount += 1;
+        bucket.sent.totalXLM += amount;
+        bucket.sent.counterparties.set(
+          counterparty,
+          (bucket.sent.counterparties.get(counterparty) || 0) + 1
+        );
+      } else {
+        bucket.received.paymentCount += 1;
+        bucket.received.totalXLM += amount;
+        bucket.received.counterparties.set(
+          counterparty,
+          (bucket.received.counterparties.get(counterparty) || 0) + 1
+        );
+      }
+    }
+
+    const cohorts = buckets.map((bucket) => formatCohortBucket(bucket, normalizedPeriod));
+
+    return {
+      publicKey,
+      period: normalizedPeriod,
+      periods: normalizedCount,
+      range: {
+        start: oldestBucketStart ? oldestBucketStart.toISOString() : null,
+        end: newestBucketStart ? getCohortBucketEnd(newestBucketStart, normalizedPeriod).toISOString() : null,
+      },
+      cohorts,
+    };
+  });
+}
+
 const emailService = require("./emailService");
 
 // In-memory store for scheduled exports: Map<publicKey, { email, frequency, nextRunAt }>
@@ -307,15 +527,30 @@ async function triggerEmailExport(publicKey) {
  * Useful for manual cache invalidation if needed.
  */
 function clearCache(publicKey) {
-  cache.delete(`summary:${publicKey}`);
-  cache.delete(`top-recipients:${publicKey}`);
-  cache.delete(`activity:${publicKey}`);
+  for (const key of cache.keys()) {
+    if (key.startsWith(`summary:${publicKey}`)) {
+      cache.delete(key);
+      continue;
+    }
+    if (key.startsWith(`top-recipients:${publicKey}`)) {
+      cache.delete(key);
+      continue;
+    }
+    if (key.startsWith(`activity:${publicKey}`)) {
+      cache.delete(key);
+      continue;
+    }
+    if (key.startsWith(`cohorts:${publicKey}`)) {
+      cache.delete(key);
+    }
+  }
 }
 
 module.exports = {
   getSummary,
   getTopRecipients,
   getActivityByDay,
+  getCohortBreakdown,
   clearCache,
   scheduleExport,
   getExportSchedule,

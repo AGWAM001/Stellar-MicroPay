@@ -45,6 +45,28 @@ router.get(
 );
 
 /**
+ * GET /api/analytics/:publicKey/cohorts
+ * Returns repeat vs one-time counterparties grouped by period.
+ */
+router.get(
+  "/:publicKey/cohorts",
+  strictLimiter,
+  sanitizePublicKey,
+  analyticsController.getCohortBreakdown
+);
+
+/**
+ * GET /api/analytics/:publicKey/stream
+ * Server-sent events stream for new payment operations.
+ */
+router.get(
+  "/:publicKey/stream",
+  strictLimiter,
+  sanitizePublicKey,
+  analyticsController.streamPayments
+);
+
+/**
  * POST /api/analytics/:publicKey/export-schedule
  * Set up recurring email export.
  */
