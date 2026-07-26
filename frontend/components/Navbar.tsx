@@ -19,18 +19,21 @@ import {
 } from "@/lib/wallet";
 import { useWallet } from "@/lib/useWallet";
 import { useTheme } from "@/pages/_app";
+import { useTranslation } from "@/lib/i18n";
 import { NavStarIcon, MoonIcon, SunIcon } from "@/components/icons";
 
-const navLinks = [
-  { href: "/", label: "Home" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/trade", label: "Trade" },
-  { href: "/transactions", label: "Transactions" },
-  { href: "/network", label: "Network" },
-  { href: "/settings", label: "Settings" },
-];
-
 export default function Navbar() {
+  const { t } = useTranslation("navbar");
+  
+  const navLinks = [
+    { href: "/", label: t("home") },
+    { href: "/dashboard", label: t("dashboard") },
+    { href: "/trade", label: t("trade") },
+    { href: "/transactions", label: t("transactions") },
+    { href: "/network", label: t("network") },
+    { href: "/settings", label: t("settings") },
+  ];
+
   const router = useRouter();
   const { publicKey, connectWallet, disconnectWallet } = useWallet();
   const { theme, toggleTheme } = useTheme();
@@ -39,7 +42,7 @@ export default function Navbar() {
   const config = getNetworkConfig();
   const isMainnet = config.network === "mainnet";
   const networkLabel =
-    config.network === "custom" ? "Custom" : isMainnet ? "Mainnet" : "Testnet";
+    config.network === "custom" ? t("custom") : isMainnet ? t("mainnet") : t("testnet");
   const networkBadgeClassName =
     config.network === "custom"
       ? "border-purple-400/35 bg-purple-400/10 text-purple-300"
@@ -109,7 +112,7 @@ export default function Navbar() {
               <NavStarIcon className="h-4 w-4 text-stellar-400" />
             </div>
             <span className="font-display font-semibold tracking-tight text-slate-900 dark:text-white">
-              Stellar<span className="text-stellar-400">MicroPay</span>
+              {t("stellar_micropay")}
             </span>
           </Link>
 
@@ -124,8 +127,8 @@ export default function Navbar() {
 
           {feeLevel && (
             <span
-              title={`Network: ${feeLevel.charAt(0).toUpperCase()}${feeLevel.slice(1)}`}
-              aria-label={`Network fee status: ${feeLevel}`}
+              title={t("network_title", { level: feeLevel.charAt(0).toUpperCase() + feeLevel.slice(1) })}
+              aria-label={t("network_aria", { level: feeLevel })}
               className={clsx(
                 "hidden h-2.5 w-2.5 rounded-full border transition-colors md:inline-block",
                 feeLevel === "normal" && "border-emerald-400/50 bg-emerald-400",
@@ -157,7 +160,7 @@ export default function Navbar() {
           <button
             onClick={toggleTheme}
             aria-label={
-              theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+              theme === "dark" ? t("switch_light") : t("switch_dark")
             }
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
           >
@@ -167,7 +170,7 @@ export default function Navbar() {
           {publicKey ? (
             <div className="flex items-center gap-2">
               <kbd
-                title="Press Ctrl+K / Cmd+K to quick-send"
+                title={t("quick_send")}
                 className="hidden select-none items-center gap-1 rounded-md border border-stellar-500/20 bg-stellar-500/5 px-2 py-1 font-mono text-xs text-stellar-400 md:inline-flex"
               >
                 Ctrl+K
@@ -179,14 +182,14 @@ export default function Navbar() {
               </div>
               <button
                 onClick={() => setShowDisconnectConfirm(true)}
-                aria-label="Show disconnect confirmation"
+                aria-label={t("disconnect_confirm")}
                 className="px-2 py-1 text-xs text-slate-400 transition-colors hover:text-slate-300"
               >
-                Disconnect
+                {t("disconnect")}
               </button>
               {showDisconnectConfirm && (
                 <div className="flex items-center gap-1 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1">
-                  <span className="text-[11px] text-amber-300">Disconnect wallet?</span>
+                  <span className="text-[11px] text-amber-300">{t("disconnect_confirm")}</span>
                   <button
                     onClick={() => {
                       setShowDisconnectConfirm(false);
@@ -194,20 +197,20 @@ export default function Navbar() {
                     }}
                     className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:bg-red-500/20"
                   >
-                    Confirm
+                    {t("confirm")}
                   </button>
                   <button
                     onClick={() => setShowDisconnectConfirm(false)}
                     className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-white/10"
                   >
-                    Cancel
+                    {t("cancel")}
                   </button>
                 </div>
               )}
             </div>
           ) : (
             <button onClick={handleConnectClick} className="btn-primary px-4 py-2 text-sm">
-              Connect Wallet
+              {t("connect_wallet")}
             </button>
           )}
         </div>
