@@ -79,6 +79,7 @@ import { useToastContext } from "@/lib/ToastContext";
 import { getJwtToken } from "@/lib/auth";
 import { URIParseResult, uriToPrefillData } from "@/lib/sep0007";
 import { useWallet } from "@/lib/useWallet";
+import { useOnboarding } from "@/hooks/useOnboarding";
 
 interface DashboardProps {
   stellarURI?: URIParseResult | null;
@@ -149,6 +150,34 @@ function formatSnapshotTime(savedAt: number) {
   });
 }
 
+// ─── Dashboard widget drag-to-reorder (#622) ────────────────────────────────
+
+const DASHBOARD_WIDGET_IDS = ["stats", "monthlySpending", "thirtyDayVolume", "analytics"] as const;
+type DashboardWidgetId = (typeof DASHBOARD_WIDGET_IDS)[number];
+const WIDGET_ORDER_STORAGE_KEY = "stellar-micropay:dashboard-widget-order";
+
+function loadWidgetOrder(): DashboardWidgetId[] {
+  if (typeof window === "undefined") return [...DASHBOARD_WIDGET_IDS];
+
+  try {
+    const raw = window.localStorage.getItem(WIDGET_ORDER_STORAGE_KEY);
+    if (!raw) return [...DASHBOARD_WIDGET_IDS];
+    const parsed = JSON.parse(raw);
+    const isValidOrder =
+      Array.isArray(parsed) &&
+      parsed.length === DASHBOARD_WIDGET_IDS.length &&
+      DASHBOARD_WIDGET_IDS.every((id) => parsed.includes(id));
+    return isValidOrder ? (parsed as DashboardWidgetId[]) : [...DASHBOARD_WIDGET_IDS];
+  } catch {
+    return [...DASHBOARD_WIDGET_IDS];
+  }
+}
+
+function saveWidgetOrder(order: DashboardWidgetId[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(WIDGET_ORDER_STORAGE_KEY, JSON.stringify(order));
+}
+
 export default function Dashboard({ stellarURI }: DashboardProps) {
   const { publicKey } = useWallet();
   const AUTO_REFRESH_SECONDS = 30;
@@ -177,7 +206,64 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   const { addToast } = useToastContext();
   const showToast = (msg: string) => addToast(msg, "info");
   const [showQRModal, setShowQRModal] = useState(false);
-  const [showOnboardingTour, setShowOnboardingTour] = useState(false);
+  const { showTour: showOnboardingTour, completeTour: handleTourComplete, skipTour: handleTourSkip } =
+    useOnboarding(!!publicKey);
+
+  // Dashboard widget order — draggable and persisted across sessions (#622)
+  const [widgetOrder, setWidgetOrder] = useState<DashboardWidgetId[]>([...DASHBOARD_WIDGET_IDS]);
+  const [draggedWidgetId, setDraggedWidgetId] = useState<DashboardWidgetId | null>(null);
+  const [dragOverWidgetId, setDragOverWidgetId] = useState<DashboardWidgetId | null>(null);
+
+  useEffect(() => {
+    setWidgetOrder(loadWidgetOrder());
+  }, []);
+
+  const handleWidgetDragStart = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      setDraggedWidgetId(id);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+    },
+    []
+  );
+
+  const handleWidgetDragOver = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggedWidgetId && draggedWidgetId !== id) {
+        setDragOverWidgetId(id);
+      }
+    },
+    [draggedWidgetId]
+  );
+
+  const handleWidgetDragLeave = useCallback((id: DashboardWidgetId) => {
+    setDragOverWidgetId((current) => (current === id ? null : current));
+  }, []);
+
+  const handleWidgetDrop = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOverWidgetId(null);
+      const sourceId = draggedWidgetId;
+      setDraggedWidgetId(null);
+      if (!sourceId || sourceId === id) return;
+
+      setWidgetOrder((current) => {
+        const next = current.filter((widgetId) => widgetId !== sourceId);
+        const targetIndex = next.indexOf(id);
+        next.splice(targetIndex, 0, sourceId);
+        saveWidgetOrder(next);
+        return next;
+      });
+    },
+    [draggedWidgetId]
+  );
+
+  const handleWidgetDragEnd = useCallback(() => {
+    setDraggedWidgetId(null);
+    setDragOverWidgetId(null);
+  }, []);
 
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK !== "mainnet";
   const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
@@ -691,135 +777,11 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   };
 
 
-  // Onboarding tour logic
-  useEffect(() => {
-    if (publicKey) {
-      const hasSeenTour = localStorage.getItem("stellar-micropay:onboarding-completed");
-      if (!hasSeenTour) {
-        setShowOnboardingTour(true);
-      }
-    }
-  }, [publicKey]);
-
-  const handleTourComplete = () => {
-    setShowOnboardingTour(false);
-    localStorage.setItem("stellar-micropay:onboarding-completed", "true");
-  };
-
-  const handleTourSkip = () => {
-    setShowOnboardingTour(false);
-    localStorage.setItem("stellar-micropay:onboarding-completed", "true");
-  };
-
   const handlePaymentSuccess = () => {
     setTimeout(() => {
       setRefreshKey((k) => k + 1);
     }, 2000);
   };
-
-  const primeRealtimeCursor = useCallback(async () => {
-    if (!publicKey) return;
-
-    try {
-      const recent = await getRecentPaymentsForStats(publicKey, 1);
-      latestPaymentIdRef.current = recent[0]?.id ?? null;
-    } catch (err) {
-      console.warn("Failed to prime realtime payment cursor:", err);
-      latestPaymentIdRef.current = null;
-    }
-  }, [publicKey]);
-
-  const handleRealtimePayment = useCallback(
-    async (payment: PaymentRecord) => {
-      if (!payment?.id || payment.id === latestPaymentIdRef.current) {
-        return;
-      }
-
-      latestPaymentIdRef.current = payment.id;
-      setIncomingPayment(payment);
-      setRefreshKey((k) => k + 1);
-
-      if (payment.type !== "received") {
-        return;
-      }
-
-      const formattedAmount = formatAsset(payment.amount, payment.asset);
-      showToast(`Received ${formattedAmount}`);
-
-      if (notificationEnabled && Notification.permission === "granted") {
-        if (document.visibilityState === "hidden") {
-          try {
-            const registration = await navigator.serviceWorker.ready;
-            await registration.showNotification("Stellar Pay — Payment received", {
-              body: `You received ${formattedAmount}`,
-              icon: "/favicon.svg",
-              badge: "/favicon.svg",
-            });
-          } catch (err) {
-            console.error("showNotification failed:", err);
-          }
-        } else {
-          setBubbleMessage(`You received ${formattedAmount}`);
-          setShowBubble(true);
-          setTimeout(() => setShowBubble(false), 3000);
-        }
-
-        try {
-          if (!publicKey) {
-            return;
-          }
-          const bal = await getXLMBalance(publicKey);
-          setXlmBalance(bal);
-        } catch {
-          // Keep the previous balance if the refresh fails.
-        }
-      }
-    },
-    [notificationEnabled, publicKey, showToast]
-  );
-
-  const startPollingFallback = useCallback(() => {
-    if (realtimePollRef.current !== null || !publicKey) {
-      return;
-    }
-
-    realtimePollRef.current = window.setInterval(async () => {
-      try {
-        const recent = await getRecentPaymentsForStats(publicKey, 5);
-        if (recent.length === 0) {
-          return;
-        }
-
-        const newestId = recent[0]?.id ?? null;
-        if (!newestId || newestId === latestPaymentIdRef.current) {
-          latestPaymentIdRef.current = newestId;
-          return;
-        }
-
-        const unseen: PaymentRecord[] = [];
-        for (const payment of recent) {
-          if (payment.id === latestPaymentIdRef.current) {
-            break;
-          }
-          unseen.push(payment);
-        }
-
-        latestPaymentIdRef.current = newestId;
-        unseen.reverse().forEach((payment) => {
-          void handleRealtimePayment(payment);
-        });
-      } catch (err) {
-        console.error("Realtime polling fallback failed:", err);
-      }
-    }, 15000);
-  }, [handleRealtimePayment, publicKey]);
-
-  const stopPollingFallback = useCallback(() => {
-    if (realtimePollRef.current !== null) {
-      window.clearInterval(realtimePollRef.current);
-      realtimePollRef.current = null;
-    }
-  }, []);
 
   /**
    * Subscribe to the Push API using the correct MDN-documented flow:
@@ -1077,73 +1039,111 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         </div>
       </div>
 
-      <PaymentStatsWidget
-        stats={paymentStats}
-        loading={paymentStatsLoading}
-        error={paymentStatsError}
-        onRetry={fetchPaymentStats}
-      />
-
-      <MonthlySpendingChart 
-        data={spendingData} 
-        loading={spendingLoading}
-        onBarClick={setSelectedMonth}
-      />
-
-      {selectedMonth && (
-        <div className="mb-8 p-4 rounded-xl bg-stellar-500/5 border border-stellar-500/10 flex items-center justify-between animate-fade-in">
-          <div>
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider mb-1">
-              Selected Period: {selectedMonth.label}
-            </p>
-            <div className="flex items-center gap-6">
-              <div>
-                <span className="text-xs text-slate-400">Total Sent</span>
-                <p className="text-lg font-bold text-white">{selectedMonth.sent.toFixed(2)} XLM</p>
-              </div>
-              <div>
-                <span className="text-xs text-slate-400">Total Received</span>
-                <p className="text-lg font-bold text-stellar-400">{selectedMonth.received.toFixed(2)} XLM</p>
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setSelectedMonth(null)}
-            className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/5"
-          >
-            <CloseIcon className="w-5 h-5" />
-          </button>
-        </div>
-      )}
-
-      <ThirtyDayVolumeChart data={thirtyDayData} loading={thirtyDayLoading} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <TopRecipientsWidget recipients={topRecipients} loading={topRecipientsLoading} />
-        <div className="card flex flex-col justify-between">
-          <div>
-            <h2 className="font-display text-lg font-semibold text-white mb-2">Export Payment History</h2>
-            <p className="text-sm text-slate-400">Download your full transaction history as a CSV file.</p>
-          </div>
-          <button
-            onClick={handleExportCSV}
-            disabled={csvExporting}
-            className="mt-4 btn-secondary flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {csvExporting ? (
+      {(() => {
+        const widgetContent: Record<DashboardWidgetId, { label: string; node: React.ReactNode }> = {
+          stats: {
+            label: "Payment stats",
+            node: (
+              <PaymentStatsWidget
+                stats={paymentStats}
+                loading={paymentStatsLoading}
+                error={paymentStatsError}
+                onRetry={fetchPaymentStats}
+              />
+            ),
+          },
+          monthlySpending: {
+            label: "Monthly spending chart",
+            node: (
               <>
-                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
-                Exporting…
+                <MonthlySpendingChart
+                  data={spendingData}
+                  loading={spendingLoading}
+                  onBarClick={setSelectedMonth}
+                />
+
+                {selectedMonth && (
+                  <div className="mb-8 p-4 rounded-xl bg-stellar-500/5 border border-stellar-500/10 flex items-center justify-between animate-fade-in">
+                    <div>
+                      <p className="text-xs text-slate-400 font-medium uppercase tracking-wider mb-1">
+                        Selected Period: {selectedMonth.label}
+                      </p>
+                      <div className="flex items-center gap-6">
+                        <div>
+                          <span className="text-xs text-slate-400">Total Sent</span>
+                          <p className="text-lg font-bold text-white">{selectedMonth.sent.toFixed(2)} XLM</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400">Total Received</span>
+                          <p className="text-lg font-bold text-stellar-400">{selectedMonth.received.toFixed(2)} XLM</p>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSelectedMonth(null)}
+                      className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/5"
+                    >
+                      <CloseIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
               </>
-            ) : (
-              <>
-                <DownloadIcon className="w-4 h-4" />
-                Export CSV
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+            ),
+          },
+          thirtyDayVolume: {
+            label: "30-day volume chart",
+            node: <ThirtyDayVolumeChart data={thirtyDayData} loading={thirtyDayLoading} />,
+          },
+          analytics: {
+            label: "Top recipients and export",
+            node: (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <TopRecipientsWidget recipients={topRecipients} loading={topRecipientsLoading} />
+                <div className="card flex flex-col justify-between">
+                  <div>
+                    <h2 className="font-display text-lg font-semibold text-white mb-2">Export Payment History</h2>
+                    <p className="text-sm text-slate-400">Download your full transaction history as a CSV file.</p>
+                  </div>
+                  <button
+                    onClick={handleExportCSV}
+                    disabled={csvExporting}
+                    className="mt-4 btn-secondary flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {csvExporting ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+                        Exporting…
+                      </>
+                    ) : (
+                      <>
+                        <DownloadIcon className="w-4 h-4" />
+                        Export CSV
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ),
+          },
+        };
+
+        return widgetOrder.map((id) => (
+          <DraggableWidget
+            key={id}
+            id={id}
+            dragHandleLabel={widgetContent[id].label}
+            isDragging={draggedWidgetId === id}
+            isDragOver={dragOverWidgetId === id}
+            onDragStart={handleWidgetDragStart(id)}
+            onDragOver={handleWidgetDragOver(id)}
+            onDragLeave={() => handleWidgetDragLeave(id)}
+            onDrop={handleWidgetDrop(id)}
+            onDragEnd={handleWidgetDragEnd}
+          >
+            {widgetContent[id].node}
+          </DraggableWidget>
+        ));
+      })()}
 
       <div className="card mb-8 bg-gradient-to-br from-cosmos-800 to-cosmos-900 border-stellar-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-48 h-48 bg-stellar-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -1493,6 +1493,68 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         />
       )}
     </div>
+  );
+}
+
+function DraggableWidget({
+  id,
+  dragHandleLabel,
+  isDragging,
+  isDragOver,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
+  children,
+}: {
+  id: string;
+  dragHandleLabel: string;
+  isDragging: boolean;
+  isDragOver: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      data-widget-id={id}
+      className={`relative group rounded-2xl transition-opacity ${isDragging ? "opacity-40" : ""} ${
+        isDragOver ? "ring-2 ring-stellar-400/60 ring-offset-2 ring-offset-cosmos-950 rounded-2xl" : ""
+      }`}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        title="Drag to reorder"
+        aria-label={`Drag to reorder ${dragHandleLabel}`}
+        className="absolute -top-2 right-2 z-10 flex items-center justify-center cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 border border-white/10 rounded-full p-1.5"
+      >
+        <GripIcon className="w-4 h-4 text-slate-300" />
+      </button>
+      {children}
+    </div>
+  );
+}
+
+function GripIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="9" cy="6" r="1.5" />
+      <circle cx="15" cy="6" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="18" r="1.5" />
+      <circle cx="15" cy="18" r="1.5" />
+    </svg>
   );
 }
 
