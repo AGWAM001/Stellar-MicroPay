@@ -69,7 +69,6 @@ import {
   getFriendBotFunding,
   waitForAccountFunding,
   ACCOUNT_NOT_FOUND_ERROR,
-  streamPayments,
   getRecentPaymentsForStats,
   getRecentPaymentsForSparkline,
   fetchAllPayments,
@@ -355,6 +354,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [showBubble, setShowBubble] = useState(false);
   const [bubbleMessage, setBubbleMessage] = useState("");
+  const realtimeSourceRef = useRef<EventSource | null>(null);
+  const realtimePollRef = useRef<number | null>(null);
+  const latestPaymentIdRef = useRef<string | null>(null);
 
 
   // Fetch username for connected wallet
@@ -791,6 +793,10 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
    * Reference: https://developer.mozilla.org/en-US/docs/Web/API/Push_API
    */
   const subscribeToPush = async (): Promise<boolean> => {
+    if (!publicKey) {
+      return false;
+    }
+
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       showToast('Push notifications are not supported in this browser.');
       return false;
@@ -919,55 +925,59 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   useEffect(() => {
     if (!publicKey) return;
 
-    const unsubscribe = streamPayments(
-      publicKey,
-      async (payment) => {
-        if (payment.type === 'received') {
-          const formattedAmount = formatAsset(payment.amount, payment.asset);
-          showToast(`Received ${formattedAmount}`);
+    let cancelled = false;
+    let eventSource: EventSource | null = null;
 
-          if (notificationEnabled && Notification.permission === 'granted') {
-            if (document.visibilityState === 'hidden') {
-              // Page is not visible — use the service worker showNotification()
-              // so the OS notification tray receives it.
-              try {
-                const registration = await navigator.serviceWorker.ready;
-                await registration.showNotification('Stellar Pay — Payment received', {
-                  body: `You received ${formattedAmount}`,
-                  icon: '/favicon.svg',
-                  badge: '/favicon.svg',
-                });
-              } catch (err) {
-                console.error('showNotification failed:', err);
-              }
-            } else {
-              // Page is visible — in-app bubble is less intrusive.
-              setBubbleMessage(`You received ${formattedAmount}`);
-              setShowBubble(true);
-              setTimeout(() => setShowBubble(false), 3000);
-            }
-          }
+    const connect = async () => {
+      await primeRealtimeCursor();
+      if (cancelled) return;
 
-          // Refresh XLM balance after an incoming payment
-          try {
-            const bal = await getXLMBalance(publicKey);
-            setXlmBalance(bal);
-          } catch {
-            // keep previous balance on failure
-          }
-        }
+      stopPollingFallback();
 
-        setIncomingPayment(payment);
-      },
-      (error) => {
-        console.error('Dashboard payment stream error:', error);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+      const streamUrl = `${apiBase}/api/analytics/${encodeURIComponent(publicKey)}/stream`;
+
+      if (typeof window === "undefined" || !("EventSource" in window)) {
+        startPollingFallback();
+        return;
       }
-    );
+
+      eventSource = new EventSource(streamUrl);
+      realtimeSourceRef.current = eventSource;
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payment = JSON.parse(event.data) as PaymentRecord;
+          void handleRealtimePayment(payment);
+        } catch (error) {
+          console.error("Failed to parse realtime payment event:", error);
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (cancelled) return;
+
+        console.warn("Realtime payment stream disconnected; falling back to polling.");
+        eventSource?.close();
+        realtimeSourceRef.current = null;
+        startPollingFallback();
+      };
+
+      eventSource.onopen = () => {
+        stopPollingFallback();
+      };
+    };
+
+    void connect();
 
     return () => {
-      unsubscribe();
+      cancelled = true;
+      stopPollingFallback();
+      realtimeSourceRef.current?.close();
+      realtimeSourceRef.current = null;
+      eventSource?.close();
     };
-  }, [publicKey, showToast, notificationEnabled]);
+  }, [handleRealtimePayment, primeRealtimeCursor, publicKey, startPollingFallback, stopPollingFallback]);
 
   if (!publicKey) {
     return (
