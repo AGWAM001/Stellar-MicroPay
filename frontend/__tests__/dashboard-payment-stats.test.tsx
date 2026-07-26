@@ -57,6 +57,39 @@ function jsonResponse(data: unknown, ok = true) {
   } as Response);
 }
 
+function analyticsSummaryResponse() {
+  return jsonResponse({
+    success: true,
+    data: {
+      publicKey: PUBLIC_KEY,
+      totalSentXLM: "0.0000000",
+      totalReceivedXLM: "0.0000000",
+      uniqueCounterparties: 0,
+      averageTransactionSize: "0",
+      totalTransactions: 0,
+      comparison: {
+        thisWeekCount: 0,
+        lastWeekCount: 0,
+        countChangePercent: 0,
+        thisWeekVolume: "0.0000000",
+        lastWeekVolume: "0.0000000",
+        volumeChangePercent: 0,
+      },
+    },
+  });
+}
+
+function topRecipientsResponse() {
+  return jsonResponse({
+    success: true,
+    data: {
+      publicKey: PUBLIC_KEY,
+      topRecipients: [],
+      count: 0,
+    },
+  });
+}
+
 describe("Dashboard payment stats widget", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_URL = "http://localhost:4000";
@@ -66,6 +99,7 @@ describe("Dashboard payment stats widget", () => {
       disconnectWallet: jest.fn(),
       isWalletReady: true,
     });
+    delete (window as unknown as { EventSource?: typeof EventSource }).EventSource;
   });
 
   afterEach(() => {
@@ -87,6 +121,14 @@ describe("Dashboard payment stats widget", () => {
 
       if (url.includes("/api/payments/")) {
         return statsPromise;
+      }
+
+      if (url.includes("/api/analytics/") && url.includes("/summary")) {
+        return analyticsSummaryResponse();
+      }
+
+      if (url.includes("/api/analytics/") && url.includes("/top-recipients")) {
+        return topRecipientsResponse();
       }
 
       if (url.includes("/api/accounts/resolve/")) {
@@ -155,6 +197,27 @@ describe("Dashboard payment stats widget", () => {
         });
       }
 
+      if (url.includes("/api/analytics/") && url.includes("/summary")) {
+        return jsonResponse({
+          success: true,
+          data: {
+            publicKey: PUBLIC_KEY,
+            comparison: {
+              thisWeekCount: 0,
+              lastWeekCount: 0,
+              countChangePercent: 0,
+              thisWeekVolume: "0.0000000",
+              lastWeekVolume: "0.0000000",
+              volumeChangePercent: 0,
+            },
+          },
+        });
+      }
+
+      if (url.includes("/api/analytics/") && url.includes("/top-recipients")) {
+        return topRecipientsResponse();
+      }
+
       if (url.includes("/api/accounts/resolve/")) {
         return jsonResponse({ success: true, data: {} });
       }
@@ -200,6 +263,27 @@ describe("Dashboard payment stats widget", () => {
             totalTransactions: statsCalls === 1 ? 3 : 4,
           },
         });
+      }
+
+      if (url.includes("/api/analytics/") && url.includes("/summary")) {
+        return jsonResponse({
+          success: true,
+          data: {
+            publicKey: PUBLIC_KEY,
+            comparison: {
+              thisWeekCount: 0,
+              lastWeekCount: 0,
+              countChangePercent: 0,
+              thisWeekVolume: "0.0000000",
+              lastWeekVolume: "0.0000000",
+              volumeChangePercent: 0,
+            },
+          },
+        });
+      }
+
+      if (url.includes("/api/analytics/") && url.includes("/top-recipients")) {
+        return topRecipientsResponse();
       }
 
       if (url.includes("/api/accounts/resolve/")) {

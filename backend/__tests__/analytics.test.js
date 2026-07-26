@@ -266,6 +266,136 @@ describe("Analytics Service", () => {
     });
   });
 
+  describe("getCohortBreakdown", () => {
+    const cohortPayments = [
+      {
+        id: "c1",
+        type: "sent",
+        amount: "10",
+        asset: "XLM",
+        from: testPublicKey,
+        to: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW01",
+        createdAt: "2026-07-10T12:00:00Z",
+        transactionHash: "cohort-hash-1",
+        pagingToken: "cohort-token-1",
+      },
+      {
+        id: "c2",
+        type: "sent",
+        amount: "5",
+        asset: "XLM",
+        from: testPublicKey,
+        to: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW01",
+        createdAt: "2026-07-12T12:00:00Z",
+        transactionHash: "cohort-hash-2",
+        pagingToken: "cohort-token-2",
+      },
+      {
+        id: "c3",
+        type: "sent",
+        amount: "7",
+        asset: "XLM",
+        from: testPublicKey,
+        to: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW02",
+        createdAt: "2026-07-15T12:00:00Z",
+        transactionHash: "cohort-hash-3",
+        pagingToken: "cohort-token-3",
+      },
+      {
+        id: "c4",
+        type: "received",
+        amount: "20",
+        asset: "XLM",
+        from: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW03",
+        to: testPublicKey,
+        createdAt: "2026-07-18T12:00:00Z",
+        transactionHash: "cohort-hash-4",
+        pagingToken: "cohort-token-4",
+      },
+      {
+        id: "c5",
+        type: "received",
+        amount: "15",
+        asset: "XLM",
+        from: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW03",
+        to: testPublicKey,
+        createdAt: "2026-07-22T12:00:00Z",
+        transactionHash: "cohort-hash-5",
+        pagingToken: "cohort-token-5",
+      },
+      {
+        id: "c6",
+        type: "sent",
+        amount: "4",
+        asset: "XLM",
+        from: testPublicKey,
+        to: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW04",
+        createdAt: "2026-06-03T12:00:00Z",
+        transactionHash: "cohort-hash-6",
+        pagingToken: "cohort-token-6",
+      },
+      {
+        id: "c7",
+        type: "received",
+        amount: "2",
+        asset: "XLM",
+        from: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW05",
+        to: testPublicKey,
+        createdAt: "2026-06-20T12:00:00Z",
+        transactionHash: "cohort-hash-7",
+        pagingToken: "cohort-token-7",
+      },
+      {
+        id: "c8",
+        type: "received",
+        amount: "9",
+        asset: "XLM",
+        from: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXW06",
+        to: testPublicKey,
+        createdAt: "2026-05-05T12:00:00Z",
+        transactionHash: "cohort-hash-8",
+        pagingToken: "cohort-token-8",
+      },
+    ];
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2026-07-25T12:00:00Z"));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("should group repeat and one-time counterparties by month", async () => {
+      stellarService.getPayments.mockResolvedValue(cohortPayments);
+
+      const result = await analyticsService.getCohortBreakdown(testPublicKey, {
+        period: "month",
+        periods: 3,
+      });
+
+      expect(result.publicKey).toBe(testPublicKey);
+      expect(result.period).toBe("month");
+      expect(result.periods).toBe(3);
+      expect(result.cohorts).toHaveLength(3);
+
+      const july = result.cohorts[2];
+      expect(july.label).toBe("Jul 2026");
+      expect(july.sent.counterparties.repeatCounterparties).toBe(1);
+      expect(july.sent.counterparties.oneTimeCounterparties).toBe(1);
+      expect(july.sent.paymentCount).toBe(3);
+      expect(july.received.counterparties.repeatCounterparties).toBe(1);
+      expect(july.received.counterparties.oneTimeCounterparties).toBe(0);
+      expect(july.repeatRate).toBeGreaterThan(0);
+
+      const june = result.cohorts[1];
+      expect(june.label).toBe("Jun 2026");
+      expect(june.sent.counterparties.oneTimeCounterparties).toBe(1);
+      expect(june.received.counterparties.oneTimeCounterparties).toBe(1);
+    });
+  });
+
   describe("clearCache", () => {
     it("should clear cached data for a public key", async () => {
       stellarService.getPayments.mockResolvedValue(mockPayments);
