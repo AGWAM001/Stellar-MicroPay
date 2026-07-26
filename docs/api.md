@@ -40,14 +40,17 @@ Authorization: Bearer <token>
 | Limiter | Window | Limit | Applies to |
 |---------|--------|-------|------------|
 | Global | 15 minutes | 100 req/IP | All routes **except** `/health` and `/api/health` |
-| Strict | 1 minute | 20 req/IP | `/api/accounts/*`, `/api/payments/*`, `/api/analytics/*`, `/api/tips/*`, `/api/turrets/*`, `/federation` |
+| Payment | 1 minute | 10 req/IP | `/api/payments/*`, `/api/turrets/*` |
+| Read-only | 1 minute | 20 req/IP | `/api/accounts/register`, `/federation`, `/api/analytics/*`, `/api/tips/*` |
 
 Responses include `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers.
 
 | Status | Body |
 |--------|------|
 | 429 (global) | `{ "error": "Too many requests, please try again later." }` |
-| 429 (strict) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 (sensitive) | `{ "error": "Too many requests to this endpoint, please wait 1 minute." }` |
+| 429 (read-only) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 (payment) | `{ "error": "Too many requests to payment/turret routes, please wait 1 minute." }` |
 
 ---
 
@@ -189,7 +192,7 @@ FEDERATION_SERVER="http://localhost:4000/federation"
 
 ### `GET /federation`
 
-SEP-0002 federation resolver. Subject to **strict** rate limit.
+SEP-0002 federation resolver. Subject to **read-only** rate limit.
 
 **Query parameters**
 
@@ -231,7 +234,7 @@ SEP-0002 federation resolver. Subject to **strict** rate limit.
 
 ### `GET /api/accounts/resolve/:username`
 
-Resolve a registered username to a public key. Subject to **strict** rate limit.
+Resolve a registered username to a public key. Subject to **sensitive** rate limit.
 
 **Path parameters**
 
@@ -262,7 +265,7 @@ Resolve a registered username to a public key. Subject to **strict** rate limit.
 
 ### `POST /api/accounts/register`
 
-Register a username for a Stellar public key. Subject to **strict** rate limit.
+Register a username for a Stellar public key. Subject to **read-only** rate limit.
 
 **Request body (JSON)**
 
@@ -304,7 +307,7 @@ Register a username for a Stellar public key. Subject to **strict** rate limit.
 
 ### `GET /api/accounts/:publicKey`
 
-Fetch account info and balances from Horizon. Requires JWT; caller may only access their own key. Subject to **strict** rate limit.
+Fetch account info and balances from Horizon. Requires JWT; caller may only access their own key. Subject to **sensitive** rate limit.
 
 **Path parameters**
 
@@ -351,7 +354,7 @@ Fetch account info and balances from Horizon. Requires JWT; caller may only acce
 
 ### `GET /api/accounts/:publicKey/balance`
 
-Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accounts/:publicKey`.
+Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accounts/:publicKey`. Subject to **sensitive** rate limit.
 
 **Response `200`**
 ```json
@@ -372,7 +375,7 @@ Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accou
 
 ### `GET /api/payments/:publicKey`
 
-Payment history from Horizon. Subject to **strict** rate limit.
+Payment history from Horizon. Subject to **payment** rate limit.
 
 **Path parameters**
 
@@ -451,7 +454,7 @@ Aggregate payment statistics (computed from up to 100 recent payments).
 
 ## Analytics
 
-All analytics routes use a 5-minute in-memory cache per public key. Subject to **strict** rate limit.
+All analytics routes use a 5-minute in-memory cache per public key. Subject to **read-only** rate limit.
 
 ### `GET /api/analytics/:publicKey/summary`
 
@@ -529,7 +532,7 @@ Payment counts grouped by day of week (UTC).
 
 ## Tips
 
-In-memory tip ledger (v1). Subject to **strict** rate limit.
+In-memory tip ledger (v1). Subject to **read-only** rate limit.
 
 ### `POST /api/tips`
 
@@ -688,7 +691,7 @@ Tips sent by a user.
 
 ## Turrets (txFunctions)
 
-Automated transaction functions (DCA, stop-loss, escrow release). Subject to **strict** rate limit (20 req/min).
+Automated transaction functions (DCA, stop-loss, escrow release). Subject to **payment** rate limit (10 req/min).
 
 Supported `type` values: `dca`, `stop_loss`, `escrow_release`.
 
@@ -1013,7 +1016,9 @@ These apply across routes unless noted otherwise.
 | 400 | Invalid JSON body | `{ "error": "Invalid JSON body" }` |
 | 404 | Unknown route | `{ "error": "Route not found" }` |
 | 429 | Rate limit (global) | `{ "error": "Too many requests, please try again later." }` |
-| 429 | Rate limit (strict) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 | Rate limit (sensitive) | `{ "error": "Too many requests to this endpoint, please wait 1 minute." }` |
+| 429 | Rate limit (read-only) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 | Rate limit (payment) | `{ "error": "Too many requests to payment/turret routes, please wait 1 minute." }` |
 | 500 | Unhandled server error | `{ "error": "Internal Server Error" }` or `{ "error": "<message>" }` |
 
 **CORS:** Requests from origins not listed in `ALLOWED_ORIGINS` are rejected by the CORS middleware.
