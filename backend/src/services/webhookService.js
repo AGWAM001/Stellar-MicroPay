@@ -134,7 +134,7 @@ function registerMultiSigReminder(unsignedXDR, signers, threshold) {
   logger.info(JSON.stringify({ type: "multisig_reminder_registered", signersCount: signers.length, threshold }));
   
   // Start the reminder timer
-  scheduleReminder(unsignedXDR, reminder);
+  scheduleReminder(unsignedXDR);
   
   return reminder;
 }
@@ -142,7 +142,7 @@ function registerMultiSigReminder(unsignedXDR, signers, threshold) {
 /**
  * Schedule a reminder to be sent after the configurable delay
  */
-function scheduleReminder(unsignedXDR, reminder) {
+function scheduleReminder(unsignedXDR) {
   setTimeout(async () => {
     const current = multiSigReminders.get(unsignedXDR);
     if (!current || current.reminderSent) return;
