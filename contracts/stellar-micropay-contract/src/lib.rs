@@ -1397,6 +1397,53 @@ mod tests {
         assert_eq!(client.get_claimable(&id), DEPOSIT + RATE * 10);
     }
 
+    /// #556 — claim_stream and top_up_stream both land in the same ledger
+    /// (no advance_by between them). Accounting must stay exact: the top-up
+    /// must not retroactively change what was already claimable, and after a
+    /// second claim later on, claimed + whatever remains locked in the
+    /// contract must reconcile exactly against the total ever deposited.
+    #[test]
+    fn test_claim_and_top_up_same_ledger() {
+        let env = Env::default();
+        let (contract_id, client, token_id, payer, recipient) =
+            stream_fixture(&env, DEPOSIT * 2);
+        let token = token::Client::new(&env, &token_id);
+
+        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+
+        // Accrue some balance, then partially claim it.
+        advance_by(&env, 10);
+        let first_claim = client.claim_stream(&id, &recipient);
+        assert_eq!(first_claim, RATE * 10);
+
+        // top_up_stream happens in the very same ledger as the claim above —
+        // no advance_by call between them.
+        client.top_up_stream(&id, &payer, &DEPOSIT);
+
+        let after_topup = client.get_stream(&id);
+        assert_eq!(after_topup.deposited, DEPOSIT * 2);
+        assert_eq!(after_topup.claimed, RATE * 10);
+        // The top-up must not change what's claimable right now — the
+        // extended runway only shows up as ledgers advance.
+        assert_eq!(client.get_claimable(&id), 0);
+
+        advance_by(&env, 5);
+        let second_claim = client.claim_stream(&id, &recipient);
+        assert_eq!(second_claim, RATE * 5);
+
+        let final_stream = client.get_stream(&id);
+        assert_eq!(final_stream.claimed, RATE * 15);
+        assert_eq!(token.balance(&recipient), final_stream.claimed);
+
+        // Reconciliation: claimed + whatever remains locked in the contract
+        // for this stream equals the total ever deposited, exactly.
+        let remaining_in_contract = token.balance(&contract_id);
+        assert_eq!(
+            final_stream.claimed + remaining_in_contract,
+            after_topup.deposited
+        );
+    }
+
     #[test]
     fn test_close_stream_with_refund() {
         let env = Env::default();

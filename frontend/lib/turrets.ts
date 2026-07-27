@@ -41,6 +41,7 @@ async function parseJson(res: Response) {
   return json.data;
 }
 
+/** Request a signed-challenge XDR from the backend for deploying a new Turrets automation. */
 export async function createTurretsChallenge(params: {
   ownerPublicKey: string;
   type: TurretsType;
@@ -60,6 +61,7 @@ export async function createTurretsChallenge(params: {
   }>;
 }
 
+/** Submit the signed challenge to deploy a new Turrets automation and return the created deployment. */
 export async function deployTurretsFunction(params: {
   ownerPublicKey: string;
   type: TurretsType;
@@ -76,6 +78,7 @@ export async function deployTurretsFunction(params: {
   return parseJson(res) as Promise<TurretsDeployment>;
 }
 
+/** Fetch all Turrets deployments owned by the given public key. */
 export async function listTurretsFunctions(ownerPublicKey: string) {
   const res = await fetch(
     `${apiBase()}/api/turrets?ownerPublicKey=${encodeURIComponent(ownerPublicKey)}`
@@ -84,11 +87,13 @@ export async function listTurretsFunctions(ownerPublicKey: string) {
   return parseJson(res) as Promise<TurretsDeployment[]>;
 }
 
+/** Fetch the execution history for a Turrets deployment by id. */
 export async function getTurretsHistory(id: string) {
   const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/history`);
   return parseJson(res) as Promise<TurretsExecutionHistory[]>;
 }
 
+/** Pause an active Turrets deployment by id. */
 export async function pauseTurretsFunction(id: string) {
   const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/pause`, {
     method: "POST",
@@ -97,6 +102,7 @@ export async function pauseTurretsFunction(id: string) {
   return parseJson(res) as Promise<TurretsDeployment>;
 }
 
+/** Resume a paused Turrets deployment by id. */
 export async function resumeTurretsFunction(id: string) {
   const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/resume`, {
     method: "POST",

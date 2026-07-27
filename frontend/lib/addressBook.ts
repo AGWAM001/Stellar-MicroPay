@@ -78,6 +78,7 @@ function dedupeContacts(contacts: AddressBookContact[]) {
   });
 }
 
+/** Load and merge all stored contacts (current and legacy storage keys), deduplicated by address. */
 export function loadAddressBookContacts(): AddressBookContact[] {
   const primaryContacts = readContactsFromKey(ADDRESS_BOOK_STORAGE_KEY);
   const legacyContacts = readContactsFromKey(LEGACY_CONTACTS_STORAGE_KEY);
@@ -85,6 +86,7 @@ export function loadAddressBookContacts(): AddressBookContact[] {
   return dedupeContacts([...primaryContacts, ...legacyContacts, ...legacyFavourites]);
 }
 
+/** Persist the given contacts to local storage and notify listeners via a custom event. */
 export function saveAddressBookContacts(contacts: AddressBookContact[]) {
   if (typeof window === "undefined") return;
 
@@ -96,6 +98,7 @@ export function saveAddressBookContacts(contacts: AddressBookContact[]) {
   }
 }
 
+/** Create a new contact or update an existing one matched by address, then persist and return the full contacts list. */
 export function upsertAddressBookContact(input: {
   nickname: string;
   address: string;
@@ -140,6 +143,7 @@ export function upsertAddressBookContact(input: {
   return contacts;
 }
 
+/** Remove a contact by id, persist the change, and return the updated contacts list. */
 export function deleteAddressBookContact(id: string) {
   const contacts = loadAddressBookContacts().filter((contact) => contact.id !== id);
   saveAddressBookContacts(contacts);
@@ -184,6 +188,7 @@ export function getAllTags(contacts: AddressBookContact[]): string[] {
   return Array.from(tagSet).sort();
 }
 
+/** Subscribe to contact list changes (same-tab custom events and cross-tab storage events), returning an unsubscribe function. */
 export function subscribeToAddressBookContacts(callback: (contacts: AddressBookContact[]) => void) {
   if (typeof window === "undefined") return () => undefined;
 
@@ -207,6 +212,7 @@ export function subscribeToAddressBookContacts(callback: (contacts: AddressBookC
   };
 }
 
+/** Returns the local storage key used for the primary address book contacts. */
 export function getAddressBookStorageKey() {
   return ADDRESS_BOOK_STORAGE_KEY;
 }

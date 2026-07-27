@@ -22,7 +22,9 @@ import { getNetworkPassphrase } from "./stellar";
 // ─── SEP-0010 helpers ────────────────────────────────────────────────────────
 
 let jwtToken: string | null = null;
+/** Store the SEP-0010 JWT token in memory for the current session. */
 export function setJwtToken(token: string | null) { jwtToken = token; }
+/** Returns the SEP-0010 JWT token currently held in memory, or null if not authenticated. */
 export function getJwtToken() { return jwtToken; }
 
 async function fetchAuthChallenge(publicKey: string): Promise<string> {
