@@ -1081,6 +1081,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                     </div>
                     <button
                       onClick={() => setSelectedMonth(null)}
+                      aria-label="Close month details"
                       className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/5"
                     >
                       <CloseIcon className="w-5 h-5" />
