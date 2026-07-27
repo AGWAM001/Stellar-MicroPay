@@ -24,7 +24,17 @@ const PaymentLinkGenerator = dynamic(() => import("../components/PaymentLinkGene
 const WalletConnect = dynamic(() => import("../components/WalletConnect"), { ssr: false });
 const SendPaymentForm = dynamic(() => import("../components/SendPaymentForm"), { ssr: false });
 const TransactionList = dynamic(() => import("../components/TransactionList"), { ssr: false });
-const MultiSigFlow = dynamic(() => import("../components/MultiSigFlow"), { ssr: false });
+const MultiSigFlow = dynamic(() => import("../components/MultiSigFlow"), {
+  ssr: false,
+  loading: () => (
+    <div className="card mb-6 bg-cosmos-950/80 border-white/10">
+      <div className="flex items-center gap-3 py-8 justify-center">
+        <span className="h-5 w-5 animate-spin rounded-full border-2 border-stellar-400 border-t-transparent" />
+        <span className="text-sm text-slate-400">Loading multi-sig…</span>
+      </div>
+    </div>
+  ),
+});
 const OnboardingTour = dynamic(() => import("../components/OnboardingTour"), { ssr: false });
 const BatchPaymentForm = dynamic(() => import("../components/BatchPaymentForm"), { ssr: false });
 const QRCodeModal = dynamic(() => import("../components/QRCodeModal"), { ssr: false });
