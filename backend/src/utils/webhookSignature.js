@@ -23,11 +23,26 @@ function generateWebhookSignature(payload, secret) {
  * @returns {boolean} True if the signature is valid, false otherwise.
  */
 function verifyWebhookSignature(payload, secret, signature) {
+  // Reject anything that isn't a usable secret/signature before doing crypto.
+  if (typeof signature !== 'string' || signature.length === 0) {
+    return false;
+  }
+  if (typeof secret !== 'string' || secret.length === 0) {
+    return false;
+  }
+
   const expectedSignature = generateWebhookSignature(payload, secret);
-  return crypto.timingSafeEqual(
-    Buffer.from(expectedSignature, 'hex'),
-    Buffer.from(signature, 'hex')
-  );
+  const expectedBuf = Buffer.from(expectedSignature, 'hex');
+  const providedBuf = Buffer.from(signature, 'hex');
+
+  // timingSafeEqual throws on length mismatch; a length difference already means
+  // the signatures don't match, so short-circuit to false. Comparing lengths is
+  // not secret-dependent, so this leaks no timing information about the secret.
+  if (expectedBuf.length !== providedBuf.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
 }
 
 module.exports = {

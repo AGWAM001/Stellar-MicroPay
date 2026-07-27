@@ -123,9 +123,38 @@ const helmetOptions = {
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameSrc: ["'none'"],
+      // Disallow this API from being framed by any site (clickjacking defence,
+      // the CSP-level equivalent of X-Frame-Options: DENY).
+      frameAncestors: ["'none'"],
+      // Forbid <base> tag hijacking and form posts to third-party origins.
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
     },
   },
+  // HTTP Strict Transport Security — force HTTPS for two years, cover subdomains,
+  // and allow browser-preload-list inclusion. TLS is terminated at the
+  // load-balancer, so the header is emitted here for clients that reach us
+  // directly over HTTPS.
+  hsts: {
+    maxAge: 63072000, // 2 years
+    includeSubDomains: true,
+    preload: true,
+  },
+  // Send no referrer to other origins (avoids leaking API paths / tokens in
+  // Referer headers).
+  referrerPolicy: { policy: "no-referrer" },
+  // This JSON API should never be embedded cross-origin, nor share its window.
+  crossOriginResourcePolicy: { policy: "same-site" },
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  // Belt-and-braces clickjacking header for older clients that ignore CSP.
+  frameguard: { action: "deny" },
+  // Block Adobe cross-domain policy files.
+  permittedCrossDomainPolicies: { permittedPolicies: "none" },
 };
+
+// Remove the framework fingerprint header (helmet also does this, but disabling
+// at the Express level guarantees it even if helmet config changes).
+app.disable("x-powered-by");
 
 app.use(helmet(helmetOptions));
 // gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads
