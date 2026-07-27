@@ -17,6 +17,7 @@ import {
   type URIParseResult,
 } from "@/lib/sep0007";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { I18nProvider } from "@/contexts/I18nContext";
 // Re-export ThemeContext and useTheme for backward-compat (Navbar still imports from here)
 export { ThemeContext, useTheme } from "@/contexts/ThemeContext";
 import "@/styles/globals.css";
@@ -177,57 +178,59 @@ export default function App({ Component, pageProps }: AppProps) {
   }, []);
 
   return (
-    <ThemeProvider>
-      <ToastProvider>
-      <WalletProvider>
-        <Head>
-          <title>Stellar-MicroPay | Instant Micropayments</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <meta
-            name="description"
-            content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
-          />
-          <link rel="canonical" href="https://stellar-micropay.vercel.app/" />
-          <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-          <meta property="og:type" content="website" />
-          <meta property="og:url" content="https://stellar-micropay.vercel.app/" />
-          <meta
-            property="og:title"
-            content="Stellar-MicroPay | Instant Micropayments"
-          />
-          <meta
-            property="og:description"
-            content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
-          />
-          <meta
-            property="og:image"
-            content="https://stellar-micropay.vercel.app/og-card.png"
-          />
-          <meta name="twitter:card" content="summary_large_image" />
-          <meta
-            name="twitter:title"
-            content="Stellar-MicroPay | Instant Micropayments"
-          />
-          <meta
-            name="twitter:description"
-            content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
-          />
-          <meta
-            name="twitter:image"
-            content="https://stellar-micropay.vercel.app/og-card.png"
-          />
-        </Head>
+    <I18nProvider>
+      <ThemeProvider>
+        <ToastProvider>
+        <WalletProvider>
+          <Head>
+            <title>Stellar-MicroPay | Instant Micropayments</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <meta
+              name="description"
+              content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
+            />
+            <link rel="canonical" href="https://stellar-micropay.vercel.app/" />
+            <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+            <meta property="og:type" content="website" />
+            <meta property="og:url" content="https://stellar-micropay.vercel.app/" />
+            <meta
+              property="og:title"
+              content="Stellar-MicroPay | Instant Micropayments"
+            />
+            <meta
+              property="og:description"
+              content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
+            />
+            <meta
+              property="og:image"
+              content="https://stellar-micropay.vercel.app/og-card.png"
+            />
+            <meta name="twitter:card" content="summary_large_image" />
+            <meta
+              name="twitter:title"
+              content="Stellar-MicroPay | Instant Micropayments"
+            />
+            <meta
+              name="twitter:description"
+              content="Send instant, low-fee micropayments globally using the Stellar network. Secure, fast, and transparent."
+            />
+            <meta
+              name="twitter:image"
+              content="https://stellar-micropay.vercel.app/og-card.png"
+            />
+          </Head>
 
-        <AppShell
-          Component={Component}
-          pageProps={pageProps}
-          stellarURI={stellarURI}
-          isQuickSendOpen={isQuickSendOpen}
-          setIsQuickSendOpen={setIsQuickSendOpen}
-        />
-        <ToastContainer />
-      </WalletProvider>
-      </ToastProvider>
-    </ThemeProvider>
+          <AppShell
+            Component={Component}
+            pageProps={pageProps}
+            stellarURI={stellarURI}
+            isQuickSendOpen={isQuickSendOpen}
+            setIsQuickSendOpen={setIsQuickSendOpen}
+          />
+          <ToastContainer />
+        </WalletProvider>
+        </ToastProvider>
+      </ThemeProvider>
+    </I18nProvider>
   );
 }

@@ -1163,7 +1163,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
             <p className="label mb-1">Wallet Address</p>
             <button
               onClick={() => setAddressExpanded((x) => !x)}
-              className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-left break-all"
+              className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-start break-all"
               title={addressExpanded ? "Click to collapse" : "Click to show full address"}
             >
               {addressExpanded
@@ -1195,7 +1195,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
             </div>
           </div>
 
-          <div className="sm:text-right flex-shrink-0">
+          <div className="sm:text-end flex-shrink-0">
             <p className="label mb-1">XLM Balance</p>
             {balanceLoading ? (
               <div className="h-8 w-36 bg-white/10 rounded-lg animate-pulse" />
@@ -1205,7 +1205,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                   {parseFloat(xlmBalance).toLocaleString("en-US", {
                     maximumFractionDigits: 4,
                   })}
-                  <span className="text-stellar-400 text-xl ml-2">XLM</span>
+                  <span className="text-stellar-400 text-xl ms-2">XLM</span>
                 </div>
                 {xlmPrice !== null && (
                   <p className="text-sm text-slate-400 mt-0.5">
@@ -1230,12 +1230,12 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                   <RefreshIcon className={`w-3 h-3 ${isRefreshingBalance ? "animate-spin" : ""}`} />
                   {isRefreshingBalance ? "Refreshing..." : "Refresh"}
                 </button>
-                <p className="mt-1 text-[11px] text-slate-400 sm:text-right">
+                <p className="mt-1 text-[11px] text-slate-400 sm:text-end">
                   Refreshing in {refreshCountdown}s
                 </p>
               </div>
             ) : accountNotFound && isTestnet ? (
-              <div className="sm:text-right">
+              <div className="sm:text-end">
                 <p className="text-amber-400 text-sm mb-2">Account not funded yet</p>
                 <p className="text-xs text-slate-400">
                   Use the funding card below to credit your wallet on testnet.
