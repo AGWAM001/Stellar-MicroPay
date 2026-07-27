@@ -40,6 +40,8 @@ import {
   NETWORK_PASSPHRASE,
 } from "./stellarConfig";
 
+import { apiFetch } from "./api";
+
 export {
   server,
   getServer,
@@ -910,15 +912,15 @@ export async function getPaymentHistory(
         category: TransactionCategory.Payment,
       };
     } else if (op.type === "account_merge") {
-      const merge = op as any; // Cast to any to access Horizon properties that might be missing in type definitions
+      const merge = op as Horizon.HorizonApi.AccountMergeOperationResponse;
 
       record = {
         id: merge.id,
         type: "merge",
-        amount: "0", // Account merge doesn't have an amount
+        amount: "0",
         asset: "XLM",
-        from: merge.account || merge.source_account, // Handle potential variations in property names
-        to: merge.into, // The destination account
+        from: merge.source_account,
+        to: merge.into,
         createdAt: merge.created_at,
         transactionHash: merge.transaction_hash,
         pagingToken: merge.paging_token,
@@ -1334,7 +1336,7 @@ export function streamPayments(
     .cursor("now");
 
   const close = paymentsBuilder.stream({
-    onmessage: async (op: any) => {
+    onmessage: async (op) => {
       if (op.type !== "payment") return;
 
       const payment = op as Horizon.HorizonApi.PaymentOperationResponse;
@@ -1422,20 +1424,11 @@ export async function resolveFederationAddress(
     return resolveViaSdk();
   }
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
-  const federationUrl = `${apiBase}/federation?q=${encodeURIComponent(
-    normalizedAddress
-  )}&type=name`;
-
   try {
-    const response = await fetch(federationUrl);
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(
-        payload?.error || `Federation lookup failed with status ${response.status}`
-      );
-    }
+    const payload = await apiFetch<{ stellar_address: string; account_id: string }>(
+      `/federation?q=${encodeURIComponent(normalizedAddress)}&type=name`,
+      { raw: true },
+    );
 
     if (!isValidStellarAddress(payload?.account_id || "")) {
       throw new Error("Federation lookup did not return a valid account ID");
@@ -1544,7 +1537,7 @@ export interface Orderbook {
  */
 export interface TradeAggregation {
   timestamp: number;
-  trade_count: number;
+  trade_count: number | string;
   base_volume: string;
   counter_volume: string;
   avg: string;
@@ -1561,8 +1554,8 @@ export interface TradeAggregation {
 export interface OpenOffer {
   id: string | number;
   seller: string;
-  selling: Asset;
-  buying: Asset;
+  selling: { asset_type: string; asset_code?: string; asset_issuer?: string };
+  buying: { asset_type: string; asset_code?: string; asset_issuer?: string };
   amount: string;
   price: string;
 }
@@ -1607,8 +1600,8 @@ export async function fetchTradeAggregations(
     .order("desc")
     .call();
 
-  return records.records.map((r: any) => ({
-    timestamp: parseInt(r.timestamp),
+  return records.records.map((r) => ({
+    timestamp: parseInt(String(r.timestamp)),
     trade_count: r.trade_count,
     base_volume: r.base_volume,
     counter_volume: r.counter_volume,
@@ -1626,7 +1619,7 @@ export async function fetchTradeAggregations(
  */
 export async function fetchOpenOffers(publicKey: string): Promise<OpenOffer[]> {
   const result = await server.offers().forAccount(publicKey).call();
-  return result.records.map((r: any) => ({
+  return result.records.map((r) => ({
     id: r.id,
     seller: r.seller,
     selling: r.selling,
@@ -1833,8 +1826,9 @@ export async function resolveStellarName(name: string): Promise<string> {
     if (!record.account_id) throw new Error('Name resolved but no address found')
     snsCache.set(trimmed, { address: record.account_id, expiresAt: Date.now() + SNS_CACHE_TTL_MS })
     return record.account_id
-  } catch (err: any) {
-    throw new Error(`Could not resolve "${trimmed}": ${err.message ?? 'Unknown error'}`)
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new Error(`Could not resolve "${trimmed}": ${message}`);
   }
 }
 
@@ -1951,8 +1945,7 @@ export async function getEscrow(callerPublicKey: string, id: number): Promise<Es
       .build();
     const sim = await sorobanServer.simulateTransaction(tx);
     if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) return null;
-    const decoded = scValToNative(sim.result.retval) as any;
-    // contract returns the Escrow struct as a map keyed by field name
+    const decoded = scValToNative(sim.result.retval) as RawEscrowStruct;
     return {
       id: Number(decoded.id),
       from: decoded.from,
@@ -1960,8 +1953,7 @@ export async function getEscrow(callerPublicKey: string, id: number): Promise<Es
       token: decoded.token,
       amount: String(decoded.amount),
       releaseLedger: Number(decoded.release_ledger),
-      status:
-        decoded.status?.tag ?? decoded.status ?? "Pending",
+      status: resolveEscrowStatus(decoded.status),
     };
   } catch {
     return null;

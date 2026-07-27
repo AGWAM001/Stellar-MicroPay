@@ -868,6 +868,9 @@ impl MicroPayContract {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod benchmarks;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::{
