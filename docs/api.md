@@ -27,7 +27,15 @@ Most JSON endpoints use one of these shapes:
 { "error": "Human-readable message" }
 ```
 
-Some endpoints (health, federation, auth challenge, webhooks list) return a flat object without the `success` / `data` wrapper. Each route below shows the actual response shape.
+**Error response rule:** All error responses (4xx and 5xx) use the `{ "error": "..." }` shape consistently. The `success` field is omitted from error responses — clients should check the HTTP status code instead.
+
+Some endpoints return a flat success object without the `success` / `data` wrapper. These are intentional exceptions documented below:
+
+| Endpoint | Reason |
+|----------|--------|
+| `GET /health`, `GET /api/health` | Health checks return minimal flat JSON for liveness probes |
+| `GET /federation` | SEP-0002 federation responses follow the Stellar protocol spec |
+| `GET /api/auth` | SEP-0010 challenge returns raw XDR for client-side signing |
 
 **Authentication:** Account detail routes require a JWT from [SEP-0010 auth](#authentication). Send:
 
@@ -1064,7 +1072,7 @@ Register Horizon SSE listeners that POST to your URL when payments are received.
 ```json
 {
   "success": true,
-  "webhook": {
+  "data": {
     "id": "1",
     "publicKey": "GABC...",
     "url": "https://example.com/webhooks/stellar",
@@ -1119,7 +1127,8 @@ GET /api/webhooks/GABC1234567890123456789012345678901234567890123456789012345
 **Response `200`**
 ```json
 {
-  "webhooks": [
+  "success": true,
+  "data": [
     {
       "id": "1",
       "publicKey": "GABC...",
@@ -1151,8 +1160,7 @@ DELETE /api/webhooks/1
 **Response `200`**
 ```json
 {
-  "success": true,
-  "message": "Webhook 1 deleted"
+  "success": true
 }
 ```
 
