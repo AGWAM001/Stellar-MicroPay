@@ -16,7 +16,7 @@ router.post("/", (req, res) => {
   }
   try {
     const webhook = registerWebhook(publicKey, url, secret);
-    return res.status(201).json({ success: true, webhook });
+    return res.status(201).json({ success: true, data: webhook });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -29,7 +29,7 @@ router.post("/", (req, res) => {
 router.get("/:publicKey", (req, res) => {
   const { publicKey } = req.params;
   const hooks = getWebhooksByPublicKey(publicKey);
-  return res.json({ webhooks: hooks });
+  return res.json({ success: true, data: hooks });
 });
 
 /**
@@ -42,7 +42,7 @@ router.delete("/:id", (req, res) => {
   if (!deleted) {
     return res.status(404).json({ error: "Webhook not found" });
   }
-  return res.json({ success: true, message: `Webhook ${id} deleted` });
+  return res.json({ success: true });
 });
 
 module.exports = router;

@@ -44,7 +44,6 @@ async function registerUsername(req, res, next) {
 
     if (!username || !publicKey) {
       return res.status(400).json({
-        success: false,
         error: "Username and public key are required",
       });
     }
@@ -70,7 +69,6 @@ async function resolveUsername(req, res, next) {
 
     if (username.toLowerCase() === 'alice') {
       return res.status(501).json({
-        success: false,
         error: "Not Implemented",
       });
     }
