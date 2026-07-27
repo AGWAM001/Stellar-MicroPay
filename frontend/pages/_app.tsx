@@ -117,8 +117,14 @@ function AppShell({
   return (
     <>
       <div className="min-h-screen bg-white bg-grid transition-colors duration-300 dark:bg-cosmos-900">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[9999] focus:rounded-lg focus:bg-stellar-500 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:outline-none focus:ring-2 focus:ring-white"
+        >
+          Skip to main content
+        </a>
         <Navbar />
-        <main>
+        <main id="main-content" tabIndex={-1}>
           <Component {...pageProps} stellarURI={stellarURI} />
         </main>
         <InstallBanner />
