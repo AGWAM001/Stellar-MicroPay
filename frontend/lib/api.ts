@@ -63,8 +63,8 @@ export async function apiFetch<T>(
     return json as T;
   }
 
-  const envelope = json as ApiSuccessResponse<T> | null;
-  if (envelope?.success === false) {
+  const envelope = json as ApiSuccessResponse<T> | ApiErrorResponse | null;
+  if (envelope && "error" in envelope) {
     throw new ApiError(
       envelope.error ?? "Request failed",
       res.status,
@@ -72,5 +72,5 @@ export async function apiFetch<T>(
     );
   }
 
-  return (envelope?.data ?? json) as T;
+  return (envelope && "data" in envelope ? (envelope as ApiSuccessResponse<T>).data : json) as T;
 }
