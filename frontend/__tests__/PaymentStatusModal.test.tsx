@@ -380,9 +380,9 @@ describe("PaymentStatusModal", () => {
     it("renders with proper ARIA attributes", async () => {
       const user = userEvent.setup();
       render(<ModalHarness status="building" />);
-      
+
       await user.click(screen.getByRole("button", { name: "Open modal" }));
-      
+
       const dialog = screen.getByRole("dialog");
       expect(dialog).toHaveAttribute("aria-modal", "true");
       expect(dialog).toHaveAttribute("aria-labelledby", "payment-status-title");
@@ -391,11 +391,92 @@ describe("PaymentStatusModal", () => {
     it("has proper heading for screen readers", async () => {
       const user = userEvent.setup();
       render(<ModalHarness status="success" />);
-      
+
       await user.click(screen.getByRole("button", { name: "Open modal" }));
-      
+
       const title = screen.getByRole("heading", { level: 3 });
       expect(title).toHaveAttribute("id", "payment-status-title");
+    });
+  });
+
+  describe("focus trap & focus-return (#597)", () => {
+    it("moves focus into the modal when it opens", async () => {
+      const user = userEvent.setup();
+      render(<ModalHarness status="success" />);
+
+      await user.click(screen.getByRole("button", { name: "Open modal" }));
+      const dialog = await screen.findByRole("dialog");
+
+      await waitFor(() => {
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      });
+    });
+
+    it("Tab key keeps focus inside the modal while it is open", async () => {
+      const user = userEvent.setup();
+      render(<ModalHarness status="success" />);
+
+      await user.click(screen.getByRole("button", { name: "Open modal" }));
+      const dialog = await screen.findByRole("dialog");
+
+      await waitFor(() => {
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      });
+
+      // Tab once — should still be inside the modal
+      await user.tab();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+
+      // Tab again — still inside
+      await user.tab();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it("Shift+Tab also keeps focus inside the modal", async () => {
+      const user = userEvent.setup();
+      render(<ModalHarness status="success" />);
+
+      await user.click(screen.getByRole("button", { name: "Open modal" }));
+      const dialog = await screen.findByRole("dialog");
+
+      await waitFor(() => {
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      });
+
+      await user.tab({ shift: true });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it("returns focus to the opener button after the modal closes via Escape", async () => {
+      const user = userEvent.setup();
+      render(<ModalHarness status="success" />);
+
+      const opener = screen.getByRole("button", { name: "Open modal" });
+      await user.click(opener);
+
+      await screen.findByRole("dialog");
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => {
+        expect(opener).toHaveFocus();
+      });
+    });
+
+    it("returns focus to the opener button after the modal closes via Close button", async () => {
+      const user = userEvent.setup();
+      render(<ModalHarness status="success" />);
+
+      const opener = screen.getByRole("button", { name: "Open modal" });
+      await user.click(opener);
+
+      await screen.findByRole("dialog");
+      const closeBtn = screen.getByRole("button", { name: /^Close$/i });
+      await user.click(closeBtn);
+
+      await waitFor(() => {
+        expect(opener).toHaveFocus();
+      });
     });
   });
 });
