@@ -40,6 +40,8 @@ import {
   NETWORK_PASSPHRASE,
 } from "./stellarConfig";
 
+import { apiFetch } from "./api";
+
 export {
   server,
   getServer,
@@ -1419,20 +1421,11 @@ export async function resolveFederationAddress(
     return resolveViaSdk();
   }
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
-  const federationUrl = `${apiBase}/federation?q=${encodeURIComponent(
-    normalizedAddress
-  )}&type=name`;
-
   try {
-    const response = await fetch(federationUrl);
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(
-        payload?.error || `Federation lookup failed with status ${response.status}`
-      );
-    }
+    const payload = await apiFetch<{ stellar_address: string; account_id: string }>(
+      `/federation?q=${encodeURIComponent(normalizedAddress)}&type=name`,
+      { raw: true },
+    );
 
     if (!isValidStellarAddress(payload?.account_id || "")) {
       throw new Error("Federation lookup did not return a valid account ID");
