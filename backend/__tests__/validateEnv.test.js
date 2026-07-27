@@ -184,4 +184,29 @@ describe("parseAllowedOrigins", () => {
     const { warnings } = parseAllowedOrigins("https://a.com/,*.evil.com,https://ok.com");
     expect(warnings).toHaveLength(2);
   });
+
+  it("asserts exact-origin matching - similar port is not allowed", () => {
+    // Test that the parsing does NOT do prefix/substring matching
+    const { origins } = parseAllowedOrigins("http://localhost:3000");
+    expect(origins).toEqual(["http://localhost:3000"]);
+    // A different port should NOT match
+    expect(origins).not.toContain("http://localhost:3001");
+    expect(origins).not.toContain("http://localhost:300");
+  });
+
+  it("asserts exact-origin matching - subpath is not allowed", () => {
+    // Test that origins with paths are treated as distinct
+    const { origins } = parseAllowedOrigins("https://example.com");
+    expect(origins).toEqual(["https://example.com"]);
+    // A path component should NOT match the base origin
+    expect(origins).not.toContain("https://example.com/path");
+  });
+
+  it("asserts exact-origin matching - subdomain is not allowed", () => {
+    // Test that subdomains are treated as distinct
+    const { origins } = parseAllowedOrigins("https://example.com");
+    expect(origins).toEqual(["https://example.com"]);
+    // A subdomain should NOT match the base domain
+    expect(origins).not.toContain("https://sub.example.com");
+  });
 });

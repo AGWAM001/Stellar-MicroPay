@@ -67,7 +67,8 @@ function getHistory(req, res, next) {
 function pause(req, res, next) {
   try {
     const { id } = req.params;
-    const data = turretsService.setDeploymentStatus(id, "paused");
+    const actor = req.user?.publicKey; // From JWT auth middleware
+    const data = turretsService.setDeploymentStatus(id, "paused", actor);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -77,7 +78,23 @@ function pause(req, res, next) {
 function resume(req, res, next) {
   try {
     const { id } = req.params;
-    const data = turretsService.setDeploymentStatus(id, "active");
+    const actor = req.user?.publicKey; // From JWT auth middleware
+    const data = turretsService.setDeploymentStatus(id, "active", actor);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+function getAuditLog(req, res, next) {
+  try {
+    const { actor, deploymentId, action, limit } = req.query;
+    const filters = {};
+    if (actor) filters.actor = actor;
+    if (deploymentId) filters.deploymentId = deploymentId;
+    if (action) filters.action = action;
+    if (limit) filters.limit = parseInt(limit, 10);
+    const data = turretsService.getAuditLog(filters);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -92,4 +109,5 @@ module.exports = {
   getHistory,
   pause,
   resume,
+  getAuditLog,
 };
