@@ -4,6 +4,8 @@
 
 **Interactive docs:** [Swagger UI](http://localhost:4000/api/docs) · [OpenAPI JSON](http://localhost:4000/api/docs.json)
 
+**Client examples:** [TypeScript & Python](./sdk-examples.md)
+
 ---
 
 ## Response conventions
@@ -779,6 +781,11 @@ List deployments.
 |------|------|----------|-------------|
 | ownerPublicKey | string | no | Filter by owner `G...` key |
 
+**Example request**
+```
+GET /api/turrets?ownerPublicKey=GABC1234567890123456789012345678901234567890123456789012345
+```
+
 **Response `200`**
 ```json
 {
@@ -878,6 +885,22 @@ Deploy a txFunction after signing the challenge.
 | deploymentHash | string | yes | Hash from challenge response |
 | signedChallengeXDR | string | yes | Challenge XDR signed by owner |
 
+**Example request**
+```json
+{
+  "ownerPublicKey": "GABC1234567890123456789012345678901234567890123456789012345",
+  "type": "dca",
+  "config": {
+    "intervalMinutes": 60,
+    "amountQuote": 10,
+    "quoteAssetCode": "USDC",
+    "quoteAssetIssuer": "GBBD47IF6LOC7NNYVK5WQCCFNNBX2L5TBRW2NTRU3OBMKENZ5YKF3NPS"
+  },
+  "deploymentHash": "a1b2c3d4e5f6...",
+  "signedChallengeXDR": "AAAAAgAAAAC..."
+}
+```
+
 **Response `201`**
 ```json
 {
@@ -915,6 +938,11 @@ Get a single deployment.
 |------|------|-------------|
 | id | string (UUID) | Deployment ID |
 
+**Example request**
+```
+GET /api/turrets/550e8400-e29b-41d4-a716-446655440000
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment } }`
 
 **Errors**
@@ -928,6 +956,11 @@ Get a single deployment.
 ### `GET /api/turrets/:id/history`
 
 Execution log for a deployment (newest first).
+
+**Example request**
+```
+GET /api/turrets/550e8400-e29b-41d4-a716-446655440000/history
+```
 
 **Response `200`**
 ```json
@@ -958,7 +991,24 @@ Execution log for a deployment (newest first).
 
 Pause a deployment.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| id | string (UUID) | Deployment ID |
+
+**Example request**
+```
+POST /api/turrets/550e8400-e29b-41d4-a716-446655440000/pause
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment, "status": "paused" } }`
+
+**Errors**
+
+| Status | Body |
+|--------|------|
+| 404 | `{ "error": "txFunction not found" }` |
 
 ---
 
@@ -966,7 +1016,24 @@ Pause a deployment.
 
 Resume a paused deployment.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| id | string (UUID) | Deployment ID |
+
+**Example request**
+```
+POST /api/turrets/550e8400-e29b-41d4-a716-446655440000/resume
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment, "status": "active" } }`
+
+**Errors**
+
+| Status | Body |
+|--------|------|
+| 404 | `{ "error": "txFunction not found" }` |
 
 ---
 
@@ -1038,6 +1105,17 @@ Header: `X-Webhook-Signature` — HMAC-SHA256 hex of the JSON body using `secret
 
 List webhooks for an account.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| publicKey | string | Stellar `G...` public key |
+
+**Example request**
+```
+GET /api/webhooks/GABC1234567890123456789012345678901234567890123456789012345
+```
+
 **Response `200`**
 ```json
 {
@@ -1064,6 +1142,11 @@ Delete a webhook by numeric ID.
 | Name | Type | Description |
 |------|------|-------------|
 | id | string | Webhook ID assigned at registration |
+
+**Example request**
+```
+DELETE /api/webhooks/1
+```
 
 **Response `200`**
 ```json
