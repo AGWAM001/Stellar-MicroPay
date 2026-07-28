@@ -6,6 +6,10 @@ export function useCountUp(target: number, duration: number = 2000, startOnView:
   const [hasAnimated, setHasAnimated] = useState(false);
   const elementRef = useRef<HTMLDivElement>(null);
 
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   useEffect(() => {
     if (!startOnView) {
       setIsVisible(true);
@@ -28,6 +32,11 @@ export function useCountUp(target: number, duration: number = 2000, startOnView:
   useEffect(() => {
     if (!isVisible || hasAnimated) return;
 
+    if (prefersReducedMotion) {
+      setCount(target);
+      return;
+    }
+
     let startTime: number;
     const animate = (currentTime: number) => {
       if (!startTime) startTime = currentTime;
@@ -41,7 +50,7 @@ export function useCountUp(target: number, duration: number = 2000, startOnView:
     };
 
     requestAnimationFrame(animate);
-  }, [isVisible, target, duration, hasAnimated]);
+  }, [isVisible, target, duration, hasAnimated, prefersReducedMotion]);
 
   return { count, elementRef };
 }

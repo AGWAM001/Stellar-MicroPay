@@ -36,6 +36,9 @@ import { signTransactionWithWallet } from "../lib/wallet";
 /** Payments at or above this amount (XLM) will surface the multi-sig UI. */
 export const MULTISIG_THRESHOLD_XLM = 100;
 
+/** Configurable delay for signature reminder (in milliseconds) */
+const REMINDER_DELAY_MS = parseInt(process.env.NEXT_PUBLIC_MULTISIG_REMINDER_DELAY_MS || "300000"); // Default 5 minutes
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Step = "build" | "sign" | "share" | "collect" | "submit" | "success";
@@ -46,6 +49,8 @@ interface MultiSigFlowProps {
   /** Pre-fill from SendPaymentForm when amount exceeds threshold. */
   prefill?: { destination: string; amount: string; memo?: string } | null;
   onSuccess?: () => void;
+  /** Optional array of co-signer public keys for reminder tracking */
+  cosigners?: string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -73,6 +78,7 @@ export default function MultiSigFlow({
   xlmBalance,
   prefill,
   onSuccess,
+  cosigners = [],
 }: MultiSigFlowProps) {
   const [step, setStep] = useState<Step>("build");
 
@@ -94,6 +100,7 @@ export default function MultiSigFlow({
   const [copied, setCopied] = useState(false);
   const [xdrCopied, setXdrCopied] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [reminderScheduled, setReminderScheduled] = useState(false);
 
   const balance = parseFloat(xlmBalance);
   const amountNum = parseFloat(amount);
@@ -123,6 +130,18 @@ export default function MultiSigFlow({
       });
       setUnsignedXDR(tx.toXDR());
       setStep("sign");
+      
+      // Register multi-sig reminder if cosigners are provided
+      if (cosigners.length > 0 && unsignedXDR) {
+        try {
+          // In a real implementation, this would call the backend API
+          // For now, we'll simulate the reminder scheduling locally
+          scheduleLocalReminder(unsignedXDR, [publicKey, ...cosigners], threshold);
+          setReminderScheduled(true);
+        } catch (err) {
+          console.warn("Failed to schedule multi-sig reminder:", err);
+        }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to build transaction");
     } finally {
@@ -141,6 +160,11 @@ export default function MultiSigFlow({
       if (signError || !signedXDR) throw new Error(signError || "Signing rejected");
       setInitiatorSignedXDR(signedXDR);
       setStep("share");
+      
+      // Mark initiator as signed in reminder tracking
+      if (reminderScheduled) {
+        markSignerSigned(unsignedXDR, publicKey);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Signing failed");
     } finally {
@@ -176,6 +200,12 @@ export default function MultiSigFlow({
     setCosignerXDRs((prev) => [...prev, trimmed]);
     setPastedXDR("");
     setError(null);
+    
+    // Mark a signer as signed (in a real implementation, we'd extract the signer public key from the XDR)
+    if (reminderScheduled && unsignedXDR) {
+      // For now, we'll just increment a counter since we can't easily extract the signer from XDR
+      markSignerSigned(unsignedXDR, "cosigner");
+    }
   };
 
   const handleRemoveCosignerXDR = (index: number) => {
@@ -194,6 +224,11 @@ export default function MultiSigFlow({
       setTxHash(result.hash);
       setStep("success");
       onSuccess?.();
+      
+      // Cancel reminder since transaction is submitted
+      if (reminderScheduled && unsignedXDR) {
+        cancelReminder(unsignedXDR);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
@@ -215,6 +250,12 @@ export default function MultiSigFlow({
     setPastedXDR("");
     setError(null);
     setTxHash(null);
+    setReminderScheduled(false);
+    
+    // Cancel any pending reminder
+    if (unsignedXDR) {
+      cancelReminder(unsignedXDR);
+    }
   };
 
   const STEPS: Step[] = ["build", "sign", "share", "collect", "submit"];
@@ -229,6 +270,43 @@ export default function MultiSigFlow({
     success: "Submit",
   };
 
+  // ── Local reminder tracking (client-side simulation) ────────────────────────
+  
+  const reminderTimers = new Map<string, NodeJS.Timeout>();
+  
+  function scheduleLocalReminder(unsignedXDR: string, signers: string[], threshold: number) {
+    // Clear any existing timer for this XDR
+    if (reminderTimers.has(unsignedXDR)) {
+      clearTimeout(reminderTimers.get(unsignedXDR)!);
+    }
+    
+    const timer = setTimeout(() => {
+      // In a real implementation, this would call the backend webhook service
+      console.log(`[Multi-sig Reminder] Signature pending for transaction. Signers: ${signers.join(", ")}, Threshold: ${threshold}`);
+      // Show a notification to the user
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        new Notification("Multi-Sig Signature Pending", {
+          body: "A multi-sig transaction is waiting for your signature.",
+        });
+      }
+    }, REMINDER_DELAY_MS);
+    
+    reminderTimers.set(unsignedXDR, timer);
+  }
+  
+  function markSignerSigned(unsignedXDR: string, signerPublicKey: string) {
+    // In a real implementation, this would call the backend API
+    console.log(`[Multi-sig] Signer marked as signed: ${signerPublicKey}`);
+  }
+  
+  function cancelReminder(unsignedXDR: string) {
+    if (reminderTimers.has(unsignedXDR)) {
+      clearTimeout(reminderTimers.get(unsignedXDR)!);
+      reminderTimers.delete(unsignedXDR);
+      console.log(`[Multi-sig] Reminder cancelled for transaction`);
+    }
+  }
+  
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (

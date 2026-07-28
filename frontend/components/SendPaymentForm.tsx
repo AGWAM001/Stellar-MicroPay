@@ -6,6 +6,7 @@
  * Emmy123222/Stellar-MicroPay
  */
 
+import { withErrorBoundary } from "@/components/ErrorBoundary";
 import PaymentStatusModal, {
   type PaymentFlowStatus,
   type PaymentStepId,
@@ -29,6 +30,13 @@ import {
 } from "@/lib/stellar";
 import { MULTISIG_THRESHOLD_XLM } from "@/components/MultiSigFlow";
 import { signTransactionWithWallet } from "@/lib/wallet";
+import {
+  type AddressBookContact,
+  loadAddressBookContacts,
+  saveAddressBookContacts,
+  subscribeToAddressBookContacts,
+  upsertAddressBookContact,
+} from "@/lib/addressBook";
 import { formatXLM, shortenAddress } from "@/utils/format";
 import {
   SendIcon,
@@ -41,6 +49,7 @@ import {
 } from "@/components/icons";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
+import { useToastContext } from "@/lib/ToastContext";
 
 interface SendPaymentFormProps {
   publicKey: string;
@@ -57,11 +66,12 @@ interface SendPaymentFormProps {
   destinationReadOnly?: boolean;
   hideAmountField?: boolean;
   hideMemoField?: boolean;
+  accountBalances?: Array<{ code: string; issuer: string; balance: string }>;
   prefill?: {
     destination: string;
     amount: string;
     memo?: string;
-    validUntil?: number;
+    validUntil?: number | null;
     fromHistory?: boolean;
   } | null;
   aiPrefill?: {
@@ -79,13 +89,7 @@ interface CustomAsset {
   issuer: string;
 }
 
-type FavouriteEntry = {
-  name: string;
-  address: string;
-};
-
 const ESTIMATED_NETWORK_FEE = `${STELLAR_BASE_FEE_XLM} XLM`;
-const FAVOURITES_STORAGE_KEY = "stellar-micropay:favourites";
 
 interface BarcodeDetectorResult {
   rawValue?: string;
@@ -107,7 +111,7 @@ function createInitialStepTimings(): Record<PaymentStepId, PaymentStepTiming> {
   };
 }
 
-export default function SendPaymentForm({
+function SendPaymentForm({
   publicKey,
   xlmBalance,
   usdcBalance,
@@ -123,7 +127,9 @@ export default function SendPaymentForm({
   destinationReadOnly = false,
   hideAmountField = false,
   hideMemoField = false,
+  accountBalances = [],
 }: SendPaymentFormProps) {
+  const { addToast } = useToastContext();
   const [selectedAsset, setSelectedAsset] = useState<AssetType>("XLM");
   const [networkFeeXlm, setNetworkFeeXlm] = useState(STELLAR_BASE_FEE_XLM);
   const [destination, setDestination] = useState("");
@@ -263,40 +269,25 @@ export default function SendPaymentForm({
     }
   });
 
-  const [favourites, setFavourites] = useState<FavouriteEntry[]>(() => {
-    try {
-      if (typeof window !== "undefined") {
-        return JSON.parse(localStorage.getItem(FAVOURITES_STORAGE_KEY) ?? "[]");
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [isFavouritesDropdownOpen, setIsFavouritesDropdownOpen] = useState(false);
-  const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+  const [contacts, setContacts] = useState<AddressBookContact[]>(loadAddressBookContacts);
+  const [isContactsDropdownOpen, setIsContactsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const saveFavourites = (items: FavouriteEntry[]) => {
-    setFavourites(items);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(FAVOURITES_STORAGE_KEY, JSON.stringify(items));
-    }
+  useEffect(() => subscribeToAddressBookContacts(setContacts), []);
+
+  const saveContacts = (items: AddressBookContact[]) => {
+    setContacts(items);
+    saveAddressBookContacts(items);
   };
 
-  const renameFavourite = (address: string, newName: string) => {
-    saveFavourites(favourites.map((f) => (f.address === address ? { ...f, name: newName } : f)));
-  };
-
-  const deleteFavourite = (address: string) => {
-    saveFavourites(favourites.filter((f) => f.address !== address));
+  const deleteContactByAddress = (address: string) => {
+    saveContacts(contacts.filter((contact) => contact.address !== address));
   };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsFavouritesDropdownOpen(false);
+        setIsContactsDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -396,11 +387,17 @@ export default function SendPaymentForm({
 
   const xlmBal = parseFloat(xlmBalance);
   const usdcBal = usdcBalance ? parseFloat(usdcBalance) : 0;
-  const balance = selectedAsset === "XLM" ? xlmBal : usdcBal;
+  const customBal = accountBalances.find((b) => b.code === selectedAsset)
+    ? parseFloat(accountBalances.find((b) => b.code === selectedAsset)!.balance)
+    : 0;
+  const balance =
+    selectedAsset === "XLM" ? xlmBal : selectedAsset === "USDC" ? usdcBal : customBal;
   const maxSend =
     selectedAsset === "XLM"
       ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM)
-      : usdcBal;
+      : selectedAsset === "USDC"
+      ? usdcBal
+      : customBal;
 
   const amountNum = parseFloat(amount);
   const hasAmount = Number.isFinite(amountNum) && amountNum > 0;
@@ -421,13 +418,17 @@ export default function SendPaymentForm({
     amountNum <= maxSend &&
     !/[eE]/.test(amount);
   
+  const memoBytes = new TextEncoder().encode(memo).length;
+  const isMemoValid = memoBytes <= 28;
+  
   const canSubmit =
     (isValidDest || isFederationDestination || isUsernameDestination) &&
     !isResolvingDestination &&
     !destinationResolutionError &&
     isValidAmt &&
     status === "idle" &&
-    trimmedDestination !== publicKey;
+    trimmedDestination !== publicKey &&
+    isMemoValid;
 
   const resolveUsername = async (username: string): Promise<string> => {
     const cleanUsername = username.replace(/^@/, "").toLowerCase();
@@ -477,11 +478,20 @@ export default function SendPaymentForm({
     }
   };
 
-  const handleSelectFavourite = (address: string) => {
+  const contactMatches = contacts.filter((contact) => {
+    const query = destination.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      contact.nickname.toLowerCase().includes(query) ||
+      contact.address.toLowerCase().includes(query)
+    );
+  });
+
+  const handleSelectContact = (address: string) => {
     setDestination(address);
     setDestinationResolutionError(null);
     setResolvedPaymentDestination(null);
-    setIsFavouritesDropdownOpen(false);
+    setIsContactsDropdownOpen(false);
   };
 
   const startTracker = () => {
@@ -564,6 +574,16 @@ export default function SendPaymentForm({
       }
       setResolvedPaymentDestination(paymentDestination);
 
+      const customAssetEntry = accountBalances.find((b) => b.code === selectedAsset);
+      const assetParam: "XLM" | "USDC" | { code: string; issuer: string } =
+        selectedAsset === "XLM"
+          ? "XLM"
+          : selectedAsset === "USDC"
+          ? "USDC"
+          : customAssetEntry
+          ? { code: customAssetEntry.code, issuer: customAssetEntry.issuer }
+          : "XLM";
+
       const tx = isTipOnChain
         ? await buildSorobanTipTransaction({
           fromPublicKey: publicKey,
@@ -575,7 +595,7 @@ export default function SendPaymentForm({
             toPublicKey: paymentDestination,
             amount: amountNum.toFixed(7),
             memo: memo.trim() || undefined,
-            asset: selectedAsset === "USDC" ? "USDC" : "XLM",
+            asset: assetParam,
           });
       markStepCompleted("building");
 
@@ -601,12 +621,14 @@ export default function SendPaymentForm({
 
       setStatus("success");
       saveRecipient(trimmedDestination);
+      addToast(`Payment sent! Tx: ${result.hash.slice(0, 8)}…`, "success");
       onSuccess?.(result.hash);
     } catch (err: any) {
       const message = err?.message || "An unexpected error occurred";
       setError(message);
       markStepFailed(activeStep, message);
       setStatus("error");
+      addToast(message, "error", () => { setStatus("idle"); void executeSend(); });
     }
   };
 
@@ -720,7 +742,7 @@ export default function SendPaymentForm({
 
       <div className="space-y-5">
         {!hideAssetSelector && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {assetOptions.map((a) => (
               <button
                 key={a}
@@ -738,6 +760,21 @@ export default function SendPaymentForm({
                 {a}
               </button>
             ))}
+            {accountBalances.map((b) => (
+              <button
+                key={b.code}
+                type="button"
+                onClick={() => { setSelectedAsset(b.code); setAmount(""); }}
+                className={clsx(
+                  "px-4 py-1.5 rounded-full text-sm font-medium border transition-all",
+                  selectedAsset === b.code
+                    ? "bg-stellar-500/15 text-stellar-300 border-stellar-500/30"
+                    : "text-slate-400 border-white/10 hover:border-white/20"
+                )}
+              >
+                {b.code}
+              </button>
+            ))}
           </div>
         )}
 
@@ -748,27 +785,27 @@ export default function SendPaymentForm({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsFavouritesDropdownOpen(!isFavouritesDropdownOpen)}
+                  onClick={() => setIsContactsDropdownOpen(!isContactsDropdownOpen)}
                   className="text-xs text-stellar-400 hover:text-stellar-300"
                 >
-                  {isFavouritesDropdownOpen ? "Close" : "Favourites"}
+                  {isContactsDropdownOpen ? "Close" : "Contacts"}
                 </button>
                 {isValidDest && (
                   <button
                     type="button"
                     onClick={() => {
-                      const existing = favourites.find((f) => f.address === destination);
-                      if (existing) deleteFavourite(destination);
+                      const existing = contacts.find((contact) => contact.address === destination);
+                      if (existing) deleteContactByAddress(destination);
                       else {
-                        const name = prompt("Name this favourite:", destination.slice(0, 8));
-                        if (name) saveFavourites([...favourites, { name, address: destination }]);
+                        const nickname = prompt("Nickname for this contact:", destination.slice(0, 8));
+                        if (nickname) setContacts(upsertAddressBookContact({ nickname, address: destination }));
                       }
                     }}
                     className="text-stellar-400 hover:text-stellar-300"
-                    title={favourites.some((f) => f.address === destination) ? "Remove favourite" : "Add favourite"}
-                    aria-label={favourites.some((f) => f.address === destination) ? "Remove address from favourites" : "Add address to favourites"}
+                    title={contacts.some((contact) => contact.address === destination) ? "Remove contact" : "Save as contact"}
+                    aria-label={contacts.some((contact) => contact.address === destination) ? "Remove address from contacts" : "Save address as contact"}
                   >
-                    <StarIcon className="h-5 w-5" filled={favourites.some((f) => f.address === destination)} />
+                    <StarIcon className="h-5 w-5" filled={contacts.some((contact) => contact.address === destination)} />
                   </button>
                 )}
                 {isScannerSupported && status === "idle" && (
@@ -794,7 +831,9 @@ export default function SendPaymentForm({
                 setDestinationResolutionError(null);
                 setResolvedPaymentDestination(null);
                 setDestAccountWarning(null);
+                setIsContactsDropdownOpen(true);
               }}
+              onFocus={() => setIsContactsDropdownOpen(true)}
               placeholder="G..., alice*domain.com, or @username"
               className={clsx(
                 "input-field font-mono text-sm",
@@ -819,16 +858,16 @@ export default function SendPaymentForm({
               <p className="mt-1 text-xs text-amber-400">{destAccountWarning}</p>
             )}
 
-            {isFavouritesDropdownOpen && favourites.length > 0 && (
+            {isContactsDropdownOpen && contactMatches.length > 0 && (
               <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
-                {favourites.map((item) => (
+                {contactMatches.map((item) => (
                   <button
-                    key={item.address}
+                    key={item.id}
                     type="button"
-                    onClick={() => handleSelectFavourite(item.address)}
+                    onClick={() => handleSelectContact(item.address)}
                     className="flex w-full flex-col items-start rounded-lg px-3 py-2 text-left hover:bg-white/5"
                   >
-                    <span className="text-sm font-medium text-slate-200">{item.name}</span>
+                    <span className="text-sm font-medium text-slate-200">{item.nickname}</span>
                     <span className="text-xs text-slate-400">{shortenAddress(item.address, 8)}</span>
                   </button>
                 ))}
@@ -861,16 +900,23 @@ export default function SendPaymentForm({
 
         {!hideMemoField && (
           <div>
-            <label className="label">Memo (optional)</label>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="label mb-0">Memo (optional)</label>
+              <span className={clsx("text-xs transition-colors", memoBytes > 28 ? "text-red-400 font-bold" : "text-slate-400")}>
+                {memoBytes}/28 bytes
+              </span>
+            </div>
             <input
               type="text"
               value={memo}
-              onChange={(e) => handleMemoChange(truncateMemoText(e.target.value))}
+              onChange={(e) => handleMemoChange(e.target.value)}
               placeholder="Payment note..."
-              className="input-field"
+              className={clsx("input-field", memoBytes > 28 && "border-red-500/50")}
               disabled={status !== "idle"}
-              maxLength={STELLAR_MEMO_TEXT_MAX_BYTES}
             />
+            {memoBytes > 28 && (
+              <p className="mt-1 text-xs text-red-400">Memo exceeds Stellar's 28-byte limit.</p>
+            )}
           </div>
         )}
 
@@ -938,14 +984,16 @@ interface SendConfirmationModalProps {
 
 function SendConfirmationModal({ isOpen, destination, amount, asset, memo, estimatedFee, onCancel, onConfirm }: SendConfirmationModalProps) {
   if (!isOpen) return null;
+  const shortened = shortenAddress(destination, 8);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="confirm-payment-title">
       <div className="w-full max-w-md rounded-2xl bg-slate-900 p-6 border border-white/10 shadow-2xl">
-        <h3 className="text-xl font-bold text-white mb-4">Confirm Payment</h3>
+        <h3 id="confirm-payment-title" className="text-xl font-bold text-white mb-4">Confirm Payment</h3>
         <div className="space-y-4">
           <div>
             <p className="text-xs text-slate-400 uppercase font-bold">To</p>
-            <p className="text-sm font-mono text-slate-200 break-all">{destination}</p>
+            <p className="text-base font-semibold text-white">{shortened}</p>
+            <p className="text-xs font-mono text-slate-400 break-all mt-0.5">{destination}</p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -953,7 +1001,7 @@ function SendConfirmationModal({ isOpen, destination, amount, asset, memo, estim
               <p className="text-lg font-bold text-white">{amount} {asset}</p>
             </div>
             <div>
-              <p className="text-xs text-slate-400 uppercase font-bold">Fee</p>
+              <p className="text-xs text-slate-400 uppercase font-bold">Estimated Fee</p>
               <p className="text-sm text-slate-300">{estimatedFee}</p>
             </div>
           </div>
@@ -966,9 +1014,11 @@ function SendConfirmationModal({ isOpen, destination, amount, asset, memo, estim
         </div>
         <div className="mt-8 flex gap-3">
           <button onClick={onCancel} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-all">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm & Send</button>
+          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm & Sign</button>
         </div>
       </div>
     </div>
   );
 }
+
+export default withErrorBoundary(SendPaymentForm, "SendPaymentForm");

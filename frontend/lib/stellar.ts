@@ -27,80 +27,33 @@ import {
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
-export interface NetworkConfig {
-  network: "testnet" | "mainnet" | "custom";
-  horizonUrl: string;
-}
+import {
+  server,
+  getServer,
+  getNetworkConfig,
+  setNetworkConfig,
+  type NetworkConfig,
+  DEFAULT_CONFIGS,
+  NETWORK,
+  HORIZON_URL,
+  getNetworkPassphrase,
+  NETWORK_PASSPHRASE,
+} from "./stellarConfig";
 
-const DEFAULT_CONFIGS: Record<"testnet" | "mainnet", NetworkConfig> = {
-  testnet: {
-    network: "testnet",
-    horizonUrl: "https://horizon-testnet.stellar.org",
-  },
-  mainnet: {
-    network: "mainnet",
-    horizonUrl: "https://horizon.stellar.org",
-  },
+import { apiFetch } from "./api";
+
+export {
+  server,
+  getServer,
+  getNetworkConfig,
+  setNetworkConfig,
+  type NetworkConfig,
+  DEFAULT_CONFIGS,
+  NETWORK,
+  HORIZON_URL,
+  getNetworkPassphrase,
+  NETWORK_PASSPHRASE,
 };
-
-export function getNetworkConfig(): NetworkConfig {
-  if (typeof window === "undefined") {
-    // Server-side: use env vars as fallback
-    const network = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet") as "testnet" | "mainnet";
-    return DEFAULT_CONFIGS[network];
-  }
-
-  const stored = localStorage.getItem("stellar-micropay:network");
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      // Invalid stored config, fall back to default
-    }
-  }
-
-  // Default to testnet
-  return DEFAULT_CONFIGS.testnet;
-}
-
-export function setNetworkConfig(config: NetworkConfig): void {
-  if (typeof window !== "undefined") {
-    localStorage.setItem("stellar-micropay:network", JSON.stringify(config));
-  }
-}
-
-// Get current network config
-const config = getNetworkConfig();
-
-// For backwards compatibility, keep these as computed values
-export const NETWORK = config.network === "custom" ? "testnet" : config.network; // Default to testnet for custom
-export const HORIZON_URL = config.horizonUrl;
-
-/** The network passphrase is used to sign and verify transactions. */
-export function getNetworkPassphrase(): string {
-  const config = getNetworkConfig();
-  return config.network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-}
-
-// For backwards compatibility
-export const NETWORK_PASSPHRASE = getNetworkPassphrase();
-
-/** Pre-configured Horizon server instance for the active network. */
-let _server: Horizon.Server | null = null;
-export function getServer(): Horizon.Server {
-  const currentConfig = getNetworkConfig();
-  if (!_server || _server.serverURL.toString() !== currentConfig.horizonUrl) {
-    _server = new Horizon.Server(currentConfig.horizonUrl);
-  }
-  return _server;
-}
-
-// For backwards compatibility, export server as getter
-export const server = new Proxy({} as Horizon.Server, {
-  get(target, prop) {
-    return getServer()[prop as keyof Horizon.Server];
-  },
-});
 
 /** One XLM is divided into 10,000,000 stroops, Stellar's smallest unit. */
 export const STELLAR_STROOPS_PER_XLM = 10_000_000;
@@ -617,6 +570,10 @@ export async function buildChangeTrustTransaction({
 
 /**
  * Build an unsigned XLM payment transaction ready for Freighter to sign.
+ *
+ * The base fee is fetched from Horizon `/fee_stats` and set to the p50
+ * percentile so the transaction doesn't get stuck during network congestion.
+ * Falls back to {@link STELLAR_BASE_FEE_STROOPS_STRING} when offline.
  */
 export async function buildPaymentTransaction({
   fromPublicKey,
@@ -629,8 +586,31 @@ export async function buildPaymentTransaction({
   toPublicKey: string;
   amount: string;
   memo?: string;
-  asset?: "XLM" | "USDC";
+  asset?: "XLM" | "USDC" | { code: string; issuer: string };
 }): Promise<Transaction> {
+  // ── Fetch dynamic fee from Horizon fee_stats ──────────────────────────────
+  let baseFeeStroops: string = STELLAR_BASE_FEE_STROOPS_STRING;
+  try {
+    const config = getNetworkConfig();
+    const feeRes = await fetch(`${config.horizonUrl}/fee_stats`);
+    if (feeRes.ok) {
+      const feeData = await feeRes.json() as {
+        fee_charged?: { p50?: string };
+        max_fee?: { p50?: string };
+      };
+      const p50 =
+        feeData?.fee_charged?.p50 ??
+        feeData?.max_fee?.p50 ??
+        STELLAR_BASE_FEE_STROOPS_STRING;
+      const p50Num = parseInt(p50, 10);
+      if (Number.isFinite(p50Num) && p50Num > 0) {
+        baseFeeStroops = String(p50Num);
+      }
+    }
+  } catch {
+    // Network unavailable — fall back to protocol minimum
+  }
+
   const sourceAccount = await server.loadAccount(fromPublicKey);
 
   // For XLM, verify the destination account exists; if not, use create_account
@@ -652,7 +632,7 @@ export async function buildPaymentTransaction({
       }
       // Use create_account operation to fund and activate the new account
       const builder = new TransactionBuilder(sourceAccount, {
-        fee: STELLAR_BASE_FEE_STROOPS_STRING,
+        fee: baseFeeStroops,
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(
@@ -671,33 +651,46 @@ export async function buildPaymentTransaction({
     }
   }
 
-  // For USDC, verify the recipient has a trustline before building the tx
-  if (asset === "USDC") {
+  // For non-native assets, verify the recipient has the required trustline
+  const isCustomAsset = typeof asset === "object";
+  const isUSDC = asset === "USDC";
+  if (isUSDC || isCustomAsset) {
     const recipient = await server.loadAccount(toPublicKey).catch(() => null);
     if (!recipient) {
       throw new Error("Recipient account not found on the Stellar network.");
     }
+    const targetCode = isUSDC ? "USDC" : (asset as { code: string; issuer: string }).code;
+    const targetIssuer = isUSDC ? USDC_ISSUER : (asset as { code: string; issuer: string }).issuer;
     const hasTrustline = recipient.balances.some(
       (b): b is Horizon.HorizonApi.BalanceLineAsset =>
         b.asset_type !== "native" &&
-        (b as Horizon.HorizonApi.BalanceLineAsset).asset_code === "USDC" &&
-        (b as Horizon.HorizonApi.BalanceLineAsset).asset_issuer === USDC_ISSUER
+        (b as Horizon.HorizonApi.BalanceLineAsset).asset_code === targetCode &&
+        (b as Horizon.HorizonApi.BalanceLineAsset).asset_issuer === targetIssuer
     );
     if (!hasTrustline) {
       throw new Error(
-        "Recipient has no USDC trustline. They must add USDC to their Stellar wallet first."
+        `Recipient has no ${targetCode} trustline. They must add ${targetCode} to their Stellar wallet first.`
       );
     }
   }
 
+  let stellarAsset: Asset;
+  if (asset === "XLM") {
+    stellarAsset = Asset.native();
+  } else if (asset === "USDC") {
+    stellarAsset = USDC;
+  } else {
+    stellarAsset = new Asset(asset.code, asset.issuer);
+  }
+
   const builder = new TransactionBuilder(sourceAccount, {
-    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    fee: baseFeeStroops,
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       Operation.payment({
         destination: toPublicKey,
-        asset: asset === "USDC" ? USDC : Asset.native(),
+        asset: stellarAsset,
         amount: amount,
       })
     )
@@ -917,15 +910,15 @@ export async function getPaymentHistory(
         category: TransactionCategory.Payment,
       };
     } else if (op.type === "account_merge") {
-      const merge = op as any; // Cast to any to access Horizon properties that might be missing in type definitions
+      const merge = op as Horizon.HorizonApi.AccountMergeOperationResponse;
 
       record = {
         id: merge.id,
         type: "merge",
-        amount: "0", // Account merge doesn't have an amount
+        amount: "0",
         asset: "XLM",
-        from: merge.account || merge.source_account, // Handle potential variations in property names
-        to: merge.into, // The destination account
+        from: merge.source_account,
+        to: merge.into,
         createdAt: merge.created_at,
         transactionHash: merge.transaction_hash,
         pagingToken: merge.paging_token,
@@ -1340,7 +1333,7 @@ export function streamPayments(
     .cursor("now");
 
   const close = paymentsBuilder.stream({
-    onmessage: async (op: any) => {
+    onmessage: async (op) => {
       if (op.type !== "payment") return;
 
       const payment = op as Horizon.HorizonApi.PaymentOperationResponse;
@@ -1428,20 +1421,11 @@ export async function resolveFederationAddress(
     return resolveViaSdk();
   }
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
-  const federationUrl = `${apiBase}/federation?q=${encodeURIComponent(
-    normalizedAddress
-  )}&type=name`;
-
   try {
-    const response = await fetch(federationUrl);
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(
-        payload?.error || `Federation lookup failed with status ${response.status}`
-      );
-    }
+    const payload = await apiFetch<{ stellar_address: string; account_id: string }>(
+      `/federation?q=${encodeURIComponent(normalizedAddress)}&type=name`,
+      { raw: true },
+    );
 
     if (!isValidStellarAddress(payload?.account_id || "")) {
       throw new Error("Federation lookup did not return a valid account ID");
@@ -1550,7 +1534,7 @@ export interface Orderbook {
  */
 export interface TradeAggregation {
   timestamp: number;
-  trade_count: number;
+  trade_count: number | string;
   base_volume: string;
   counter_volume: string;
   avg: string;
@@ -1567,8 +1551,8 @@ export interface TradeAggregation {
 export interface OpenOffer {
   id: string | number;
   seller: string;
-  selling: Asset;
-  buying: Asset;
+  selling: { asset_type: string; asset_code?: string; asset_issuer?: string };
+  buying: { asset_type: string; asset_code?: string; asset_issuer?: string };
   amount: string;
   price: string;
 }
@@ -1613,8 +1597,8 @@ export async function fetchTradeAggregations(
     .order("desc")
     .call();
 
-  return records.records.map((r: any) => ({
-    timestamp: parseInt(r.timestamp),
+  return records.records.map((r) => ({
+    timestamp: parseInt(String(r.timestamp)),
     trade_count: r.trade_count,
     base_volume: r.base_volume,
     counter_volume: r.counter_volume,
@@ -1632,7 +1616,7 @@ export async function fetchTradeAggregations(
  */
 export async function fetchOpenOffers(publicKey: string): Promise<OpenOffer[]> {
   const result = await server.offers().forAccount(publicKey).call();
-  return result.records.map((r: any) => ({
+  return result.records.map((r) => ({
     id: r.id,
     seller: r.seller,
     selling: r.selling,
@@ -1839,8 +1823,9 @@ export async function resolveStellarName(name: string): Promise<string> {
     if (!record.account_id) throw new Error('Name resolved but no address found')
     snsCache.set(trimmed, { address: record.account_id, expiresAt: Date.now() + SNS_CACHE_TTL_MS })
     return record.account_id
-  } catch (err: any) {
-    throw new Error(`Could not resolve "${trimmed}": ${err.message ?? 'Unknown error'}`)
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new Error(`Could not resolve "${trimmed}": ${message}`);
   }
 }
 
@@ -1850,4 +1835,141 @@ export async function resolveStellarName(name: string): Promise<string> {
 export function isStellarName(value: string): boolean {
   const v = value.trim()
   return v.endsWith('.xlm') || v.includes('*')
+}
+
+// ─── Escrow (issue #213) ──────────────────────────────────────────────────────
+//
+// Thin wrappers around the contract's create_escrow / claim_escrow /
+// cancel_escrow / get_escrow entrypoints. All take a connected wallet's
+// public key as the auth source and return a built+preflighted Transaction
+// ready to hand to signTransactionWithWallet().
+
+export interface EscrowRecord {
+  id: number;
+  from: string;
+  to: string;
+  token: string;
+  amount: string; // stroops as string
+  releaseLedger: number;
+  status: "Pending" | "Released" | "Cancelled";
+}
+
+export async function buildCreateEscrowTransaction({
+  fromPublicKey,
+  toPublicKey,
+  amount,
+  releaseLedger,
+}: {
+  fromPublicKey: string;
+  toPublicKey: string;
+  amount: string;
+  releaseLedger: number;
+}): Promise<Transaction> {
+  if (!CONTRACT_ID) throw new Error("Contract ID is not configured.");
+  const sourceAccount = await server.loadAccount(fromPublicKey);
+  const contract = new Contract(CONTRACT_ID);
+  const xlmContractId = Asset.native().contractId(NETWORK_PASSPHRASE);
+  const stroops = BigInt(Math.round(parseFloat(amount) * STELLAR_STROOPS_PER_XLM));
+
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      contract.call(
+        "create_escrow",
+        nativeToScVal(xlmContractId, { type: "address" }),
+        nativeToScVal(fromPublicKey, { type: "address" }),
+        nativeToScVal(toPublicKey, { type: "address" }),
+        nativeToScVal(stroops, { type: "i128" }),
+        nativeToScVal(releaseLedger, { type: "u32" }),
+      ),
+    )
+    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
+    .build();
+
+  const simulated = await sorobanServer.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(simulated)) {
+    throw new Error(`Simulation failed: ${simulated.error}`);
+  }
+  return sorobanServer.prepareTransaction(tx);
+}
+
+async function buildEscrowMutation(
+  fromPublicKey: string,
+  method: "claim_escrow" | "cancel_escrow",
+  id: number,
+): Promise<Transaction> {
+  if (!CONTRACT_ID) throw new Error("Contract ID is not configured.");
+  const sourceAccount = await server.loadAccount(fromPublicKey);
+  const contract = new Contract(CONTRACT_ID);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, nativeToScVal(id, { type: "u32" })))
+    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
+    .build();
+  const simulated = await sorobanServer.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(simulated)) {
+    throw new Error(`Simulation failed: ${simulated.error}`);
+  }
+  return sorobanServer.prepareTransaction(tx);
+}
+
+export function buildClaimEscrowTransaction(fromPublicKey: string, id: number) {
+  return buildEscrowMutation(fromPublicKey, "claim_escrow", id);
+}
+
+export function buildCancelEscrowTransaction(fromPublicKey: string, id: number) {
+  return buildEscrowMutation(fromPublicKey, "cancel_escrow", id);
+}
+
+interface RawEscrowStruct {
+  id: number | string;
+  from: string;
+  to: string;
+  token: string;
+  amount: number | string;
+  release_ledger: number | string;
+  status?: { tag?: string } | string;
+}
+
+function resolveEscrowStatus(raw: RawEscrowStruct["status"]): EscrowRecord["status"] {
+  if (raw == null) return "Pending";
+  if (typeof raw === "string") return raw as EscrowRecord["status"];
+  return (raw.tag ?? "Pending") as EscrowRecord["status"];
+}
+
+export async function getEscrow(callerPublicKey: string, id: number): Promise<EscrowRecord | null> {
+  if (!CONTRACT_ID) return null;
+  try {
+    const contract = new Contract(CONTRACT_ID);
+    const tx = new TransactionBuilder(
+      new Account(callerPublicKey, "0"),
+      { fee: STELLAR_BASE_FEE_STROOPS_STRING, networkPassphrase: NETWORK_PASSPHRASE },
+    )
+      .addOperation(contract.call("get_escrow", nativeToScVal(id, { type: "u32" })))
+      .setTimeout(30)
+      .build();
+    const sim = await sorobanServer.simulateTransaction(tx);
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) return null;
+    const decoded = scValToNative(sim.result.retval) as RawEscrowStruct;
+    return {
+      id: Number(decoded.id),
+      from: decoded.from,
+      to: decoded.to,
+      token: decoded.token,
+      amount: String(decoded.amount),
+      releaseLedger: Number(decoded.release_ledger),
+      status: resolveEscrowStatus(decoded.status),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getCurrentLedger(): Promise<number> {
+  const latest = await sorobanServer.getLatestLedger();
+  return latest.sequence;
 }

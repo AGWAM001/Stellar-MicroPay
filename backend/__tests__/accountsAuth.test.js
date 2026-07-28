@@ -7,7 +7,7 @@
 const express = require("express");
 const request = require("supertest");
 const jwt = require("jsonwebtoken");
-const { JWT_SECRET } = require("../src/middleware/auth");
+const { JWT_SECRET, SIGN_OPTIONS } = require("../src/middleware/auth");
 const accountRoutes = require("../src/routes/accounts");
 
 const ME = "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA";
@@ -21,7 +21,7 @@ function appWithAccounts() {
 }
 
 function tokenFor(publicKey) {
-  return jwt.sign({ publicKey }, JWT_SECRET, { expiresIn: "1h" });
+  return jwt.sign({ publicKey }, JWT_SECRET, SIGN_OPTIONS);
 }
 
 describe("account routes authorization (#278)", () => {
