@@ -18,6 +18,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import Head from "next/head";
 import FloatingAssistantButton from "../components/FloatingAssistantButton";
+import { useTranslation } from "@/lib/i18n";
 
 // Dynamic imports for large components to improve initial load (Lighthouse Performance)
 const PaymentLinkGenerator = dynamic(() => import("../components/PaymentLinkGenerator"), { ssr: false });
@@ -44,16 +45,21 @@ const RecurringPayments = dynamic(() => import("../components/RecurringPayments"
 // The assistant panel (and its dependencies) should not ship in the initial
 // bundle — it's only ever needed after the user opens the floating button,
 // so it's loaded on demand with a visible loading state (#610).
-const AIPaymentAssistant = dynamic(() => import("../components/AIPaymentAssistant"), {
-  ssr: false,
-  loading: () => (
+const AIPaymentAssistantLoading = () => {
+  const { t } = useTranslation("dashboard");
+  return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70">
       <div className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-5 shadow-2xl">
         <span className="h-5 w-5 animate-spin rounded-full border-2 border-stellar-400 border-t-transparent" />
-        <span className="text-sm text-slate-300">Loading AI Payment Assistant…</span>
+        <span className="text-sm text-slate-300">{t("loading_ai")}</span>
       </div>
     </div>
-  ),
+  );
+};
+
+const AIPaymentAssistant = dynamic(() => import("../components/AIPaymentAssistant"), {
+  ssr: false,
+  loading: AIPaymentAssistantLoading,
 });
 
 import {
@@ -189,6 +195,7 @@ function saveWidgetOrder(order: DashboardWidgetId[]) {
 }
 
 export default function Dashboard({ stellarURI }: DashboardProps) {
+  const { t } = useTranslation("dashboard");
   const { publicKey } = useWallet();
   const AUTO_REFRESH_SECONDS = 30;
   // Move focus to the dashboard heading once a wallet is connected, so keyboard
@@ -776,7 +783,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     if (!publicKey) return;
 
     const ok = await copyToClipboard(publicKey);
-    if (ok) showToast("Address copied!");
+    if (ok) showToast(t("address_copied"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -864,7 +871,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     if (notificationEnabled) {
       localStorage.setItem('notificationOptIn', 'false');
       setNotificationEnabled(false);
-      showToast('Payment notifications disabled');
+      showToast(t("notifications_disabled"));
       return;
     }
 
@@ -875,7 +882,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     }
 
     if (Notification.permission === 'denied') {
-      showToast('Notifications are blocked. Please enable them in your browser settings.');
+      showToast(t("notifications_blocked"));
       return;
     }
 
@@ -885,7 +892,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
 
       localStorage.setItem('notificationOptIn', 'true');
       setNotificationEnabled(true);
-      showToast('Payment notifications enabled');
+      showToast(t("notifications_enabled"));
 
       // Confirm with an immediate notification so the user sees it working.
       // Use showNotification() via the service worker registration —
@@ -993,8 +1000,8 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-16 cursor-default select-none">
         <div className="text-center mb-10">
-          <h1 className="font-display text-3xl font-bold text-white mb-3">Dashboard</h1>
-          <p className="text-slate-400">Connect your wallet to get started</p>
+          <h1 className="font-display text-3xl font-bold text-white mb-3">{t("title")}</h1>
+          <p className="text-slate-400">{t("connect_wallet_msg")}</p>
         </div>
         <WalletConnect />
       </div>
@@ -1016,9 +1023,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
           tabIndex={-1}
           className="font-display text-3xl font-bold text-white mb-1 outline-none"
         >
-          Dashboard
+          {t("title")}
         </h1>
-        <p className="text-slate-400 text-sm">Send and receive XLM globally</p>
+        <p className="text-slate-400 text-sm">{t("subtitle")}</p>
         <div className="mt-4">
           <button
             onClick={handleToggleNotifications}
@@ -1027,10 +1034,10 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
           >
             <span>
               {notificationEnabled
-                ? 'Disable payment notifications'
+                ? t("disable_notifications")
                 : notificationPermission === 'denied'
-                ? 'Notifications blocked'
-                : 'Enable payment notifications'}
+                ? t("notifications_blocked")
+                : t("enable_notifications")}
             </span>
             {notificationEnabled
               ? <BellOffIcon className="w-4 h-4" />
@@ -1043,7 +1050,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
               onClick={handleTestNotification}
               className="mt-2 text-xs text-slate-400 hover:text-stellar-300 transition-colors flex items-center gap-1.5 cursor-pointer"
             >
-              <TestIcon className="w-3.5 h-3.5" /> Test notification
+              <TestIcon className="w-3.5 h-3.5" /> {t("test_notification")}
             </button>
           )}
         </div>
@@ -1160,7 +1167,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         <div className="absolute top-0 right-0 w-48 h-48 bg-stellar-500/5 rounded-full blur-2xl pointer-events-none" />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <p className="label mb-1">Wallet Address</p>
+            <p className="label mb-1">{t("wallet_address")}</p>
             <button
               onClick={() => setAddressExpanded((x) => !x)}
               className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-start break-all"
@@ -1177,11 +1184,11 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
               >
                 {copied ? (
                   <>
-                    <CheckIcon className="w-3.5 h-3.5" /> Copied!
+                    <CheckIcon className="w-3.5 h-3.5" /> {t("copied_address")}
                   </>
                 ) : (
                   <>
-                    <CopyIcon className="w-3.5 h-3.5" /> Copy address
+                    <CopyIcon className="w-3.5 h-3.5" /> {t("copy_address")}
                   </>
                 )}
               </button>
@@ -1190,7 +1197,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                 onClick={() => setAddressExpanded((x) => !x)}
                 className="text-xs text-slate-400 hover:text-slate-300 transition-colors cursor-pointer"
               >
-                {addressExpanded ? "Collapse" : "Show full"}
+                {addressExpanded ? t("collapse") : t("show_full")}
               </button>
             </div>
           </div>
@@ -1214,7 +1221,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                 )}
                 {staleBalanceAt && (
                   <p className="mt-1 inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[11px] font-medium text-amber-200">
-                    Offline snapshot from {formatSnapshotTime(staleBalanceAt)}
+                    {t("offline_snapshot", { time: formatSnapshotTime(staleBalanceAt) })}
                   </p>
                 )}
                 {!sparklineLoading && sparklineData.length > 0 && (
