@@ -1793,137 +1793,82 @@ export async function fetchNetworkStats(): Promise<NetworkStats> {
 
 // ── Stellar Name Service ──────────────────────────────────────────────────
 
+/** TTL for SNS resolution cache: 10 minutes */
+const SNS_CACHE_TTL_MS = 600_000;
+
 /**
- * Cached resolution entry for a Stellar name.
- *
- * @property name     - The original name string as entered by the user.
- * @property address  - The resolved Stellar public key (G...).
- * @property resolvedAt - Unix epoch milliseconds when the resolution occurred (used for TTL).
+ * Module-level cache for resolved Stellar names.
+ * Entries expire after {@link SNS_CACHE_TTL_MS}.
+ * Survives across renders; resets on page reload.
  */
-export interface ResolvedName {
-  name: string;
-  address: string;
-  resolvedAt: number;
-}
-
-const snsCache = new Map<string, ResolvedName>();
-const SNS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const resolvedNameCache = new Map<string, { address: string; expiry: number }>();
 
 /**
- * Clear the in-memory SNS resolution cache.
+ * Resolves a human-readable Stellar name to a public key (G... address).
  *
- * Primarily useful in tests to avoid cross-test pollution when mocking timers
- * or resolution results.
- */
-export function clearNameCache(): void {
-  snsCache.clear();
-}
-
-/**
- * Resolve a human-readable Stellar name to a public key.
+ * - Accepts federation addresses: `alice*domain.com`
+ * - Accepts `.xlm` shorthand: `alice.xlm` → resolved via `alice*xlm.money`
+ * - Results are cached for 10 minutes in {@link resolvedNameCache}
  *
- * Supports two input formats:
- * - **Federation addresses** — the native `name*domain.com` SEP-0002 format
- *   supported by any wallet that publishes a `stellar.toml`.  Passed directly
- *   to `Federation.Server.resolve`.
- * - **`.xlm` shorthand** — a convenience alias (e.g. `alice.xlm`) that is
- *   translated to `alice*stellarnames.org` before resolution.  StellarNames
- *   (stellarnames.org) is a community-run federation server for the `.xlm`
- *   namespace.  This mapping is documented here so it is easy to swap for
- *   another provider if needed.
- *
- * Raw `G...` public keys bypass resolution entirely and are returned as-is,
- * so callers can pass any user input without pre-checking the format.
- *
- * Results are cached for {@link SNS_CACHE_TTL_MS} (10 minutes) to avoid
- * redundant network lookups on every keystroke.  Use {@link clearNameCache}
- * to invalidate the cache in tests.
- *
- * @param name - A `.xlm` name, `name*domain.com` federation address, or raw
- *               Stellar public key.
- * @returns A promise resolving to the Stellar public key (G...).
- * @throws {Error} If the name cannot be resolved to a valid public key.
- *
- * @example
- * ```ts
- * const address = await resolveStellarName("alice.xlm");
- * // → "GABC...XYZ"
- *
- * const same = await resolveStellarName("alice*stellarnames.org");
- * // → "GABC...XYZ"
- *
- * // Raw addresses bypass resolution
- * const raw = await resolveStellarName("GABC...XYZ");
- * // → "GABC...XYZ"
- * ```
+ * @param name - Federation address or `.xlm` shorthand
+ * @returns The resolved Stellar public key (account_id)
+ * @throws {Error} If the name is invalid or cannot be resolved
  */
 export async function resolveStellarName(name: string): Promise<string> {
   const trimmed = name.trim();
 
-  // Raw Stellar public keys bypass resolution entirely
-  if (isValidStellarAddress(trimmed)) return trimmed;
-
-  const key = trimmed.toLowerCase();
-
-  // Cache hit within TTL
-  const cached = snsCache.get(key);
-  if (cached && Date.now() - cached.resolvedAt < SNS_CACHE_TTL_MS) {
-    return cached.address;
+  if (!trimmed) {
+    throw new Error("Name cannot be empty.");
   }
 
-  // Determine the federation address to look up
-  let federationAddress = trimmed;
-  if (trimmed.toLowerCase().endsWith(".xlm")) {
-    // alice.xlm → alice*stellarnames.org
-    // StellarNames (https://stellarnames.org) is a community federation server
-    // for the .xlm namespace.  Update this mapping to switch providers.
-    const localPart = trimmed.slice(0, trimmed.lastIndexOf("."));
-    federationAddress = `${localPart}*stellarnames.org`;
-  } else if (!trimmed.includes("*")) {
-    throw new Error(`Could not resolve "${trimmed}" to a Stellar address`);
+  // Return as-is if already a valid raw Stellar address
+  if (isValidStellarAddress(trimmed)) return trimmed;
+
+  // Check cache first
+  const cached = resolvedNameCache.get(trimmed);
+  if (cached && cached.expiry > Date.now()) return cached.address;
+
+  // Determine canonical federation address
+  let federationAddress: string;
+  if (trimmed.endsWith(".xlm")) {
+    // alice.xlm → alice*xlm.money (xlm.money is the public SNS resolver for .xlm handles)
+    const localPart = trimmed.slice(0, trimmed.length - 4); // strip ".xlm"
+    if (!localPart) throw new Error(`Invalid .xlm name: "${trimmed}"`);
+    federationAddress = `${localPart}*xlm.money`;
+  } else if (trimmed.includes("*")) {
+    // Standard federation address: alice*domain.com
+    const parts = trimmed.split("*");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(`Invalid federation address format: "${trimmed}". Expected "user*domain.com".`);
+    }
+    federationAddress = trimmed;
+  } else {
+    throw new Error(
+      `Invalid Stellar name: "${trimmed}". Use a federation address (alice*domain.com) or .xlm name (alice.xlm).`
+    );
   }
 
   try {
     const record = await Federation.Server.resolve(federationAddress);
     if (!record.account_id) {
-      throw new Error("Name resolved but no address found");
+      throw new Error("Name resolved but no Stellar address was returned.");
     }
-    snsCache.set(key, {
-      name: key,
-      address: record.account_id,
-      resolvedAt: Date.now(),
-    });
+    // Store in cache
+    resolvedNameCache.set(trimmed, { address: record.account_id, expiry: Date.now() + SNS_CACHE_TTL_MS });
     return record.account_id;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    throw new Error(`Could not resolve "${trimmed}" to a Stellar address`);
+    throw new Error(`Could not resolve "${trimmed}": ${message}`);
   }
 }
 
 /**
- * Returns `true` when the input looks like a Stellar name rather than a raw
- * public key.
- *
- * Detects:
- * - `.xlm` suffix shorthand (e.g. `alice.xlm`)
- * - Native federation format (e.g. `alice*domain.com`)
- *
- * Raw `G...` public keys and plain usernames (no `*` or `.xlm`) return `false`.
- *
- * @param value - User-supplied destination string.
- * @returns `true` if the value should be resolved via {@link resolveStellarName}.
- *
- * @example
- * ```ts
- * isStellarName("alice.xlm")          // true
- * isStellarName("alice*domain.com")   // true
- * isStellarName("GABC...XYZ")         // false
- * isStellarName("@username")          // false
- * ```
+ * Returns true if the input looks like a Stellar name (not a raw G... address).
+ * Matches federation addresses (contains `*`) and .xlm shorthand (ends with `.xlm`).
  */
 export function isStellarName(value: string): boolean {
   const v = value.trim();
-  return v.toLowerCase().endsWith(".xlm") || v.includes("*");
+  return v.endsWith(".xlm") || v.includes("*");
 }
 
 // ─── Escrow (issue #213) ──────────────────────────────────────────────────────
