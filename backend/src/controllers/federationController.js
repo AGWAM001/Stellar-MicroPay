@@ -9,8 +9,24 @@ const axios = require("axios");
 const usernameService = require("../services/usernameService");
 
 /**
+ * @typedef {object} FederationResponse
+ * @property {string} stellar_address - `username*domain` federated address
+ * @property {string} account_id - Stellar public key (G...)
+ */
+
+/**
  * GET /federation?q=<query>&type=<type>
  * Federation endpoint per SEP-0002.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.query
+ * @param {string} req.query.q - Stellar address (`type=name`) or account ID (`type=id`) to resolve
+ * @param {"name"|"id"} req.query.type - Resolution direction
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `FederationResponse` (or the forwarded external federation
+ *   server's response body when the domain isn't ours), or `{ error: string }` with
+ *   400/404 status on invalid input or unresolvable lookups
  */
 async function resolveFederation(req, res, next) {
   try {

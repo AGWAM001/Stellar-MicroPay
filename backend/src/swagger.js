@@ -112,6 +112,75 @@ const options = {
             count: { type: "integer" },
           },
         },
+        CohortCounterpartySummary: {
+          type: "object",
+          properties: {
+            oneTimeCounterparties: { type: "integer" },
+            repeatCounterparties: { type: "integer" },
+            totalCounterparties: { type: "integer" },
+          },
+        },
+        CohortPeriod: {
+          type: "object",
+          properties: {
+            periodStart: { type: "string", format: "date-time" },
+            periodEnd: { type: "string", format: "date-time" },
+            label: { type: "string" },
+            period: { type: "string", enum: ["month", "week"] },
+            sent: {
+              type: "object",
+              properties: {
+                paymentCount: { type: "integer" },
+                totalXLM: { type: "string" },
+                counterparties: { $ref: "#/components/schemas/CohortCounterpartySummary" },
+              },
+            },
+            received: {
+              type: "object",
+              properties: {
+                paymentCount: { type: "integer" },
+                totalXLM: { type: "string" },
+                counterparties: { $ref: "#/components/schemas/CohortCounterpartySummary" },
+              },
+            },
+            totalCounterparties: { type: "integer" },
+            repeatRate: { type: "integer" },
+          },
+        },
+        CohortBreakdown: {
+          type: "object",
+          properties: {
+            publicKey: { type: "string" },
+            period: { type: "string", enum: ["month", "week"] },
+            periods: { type: "integer" },
+            range: {
+              type: "object",
+              properties: {
+                start: { type: "string", format: "date-time", nullable: true },
+                end: { type: "string", format: "date-time", nullable: true },
+              },
+            },
+            cohorts: {
+              type: "array",
+              items: { $ref: "#/components/schemas/CohortPeriod" },
+            },
+          },
+        },
+        PaymentStreamEvent: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            type: { type: "string", enum: ["sent", "received"] },
+            amount: { type: "string" },
+            asset: { type: "string" },
+            from: { type: "string" },
+            to: { type: "string" },
+            memo: { type: "string", nullable: true },
+            createdAt: { type: "string", format: "date-time" },
+            transactionHash: { type: "string" },
+            pagingToken: { type: "string" },
+          },
+        },
         AccountBalance: {
           type: "object",
           properties: {
@@ -640,6 +709,74 @@ const options = {
                       },
                     },
                   },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/analytics/{publicKey}/cohorts": {
+        get: {
+          tags: ["Analytics"],
+          summary: "Get repeat-vs-one-time counterparty cohorts",
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+            {
+              name: "period",
+              in: "query",
+              required: false,
+              schema: { type: "string", enum: ["month", "week"] },
+              description: "Bucket size for the cohort breakdown. Defaults to month.",
+            },
+            {
+              name: "periods",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: 12 },
+              description: "How many buckets to include. Defaults to 6.",
+            },
+          ],
+          responses: {
+            200: {
+              description: "Cohort breakdown",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: { $ref: "#/components/schemas/CohortBreakdown" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/analytics/{publicKey}/stream": {
+        get: {
+          tags: ["Analytics"],
+          summary: "Stream new payment events as server-sent events",
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "text/event-stream with payment events",
+              content: {
+                "text/event-stream": {
+                  schema: { $ref: "#/components/schemas/PaymentStreamEvent" },
                 },
               },
             },

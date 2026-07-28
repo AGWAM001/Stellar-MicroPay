@@ -46,6 +46,7 @@ function saveLastPublicKey(publicKey: string | null) {
   }
 }
 
+/** Provides the wallet context, tracking the connected public key and restoring the last-connected wallet on mount. */
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [publicKey, setPublicKey] = useState<string | null>(() => loadLastPublicKey());
   const [isWalletReady, setIsWalletReady] = useState(false);
@@ -90,6 +91,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
 
+/** Access the wallet context; throws if called outside a WalletProvider. */
 export function useWallet() {
   const context = useContext(WalletContext);
 

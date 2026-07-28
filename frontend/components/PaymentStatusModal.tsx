@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type PaymentStepId = "building" | "signing" | "submitting" | "confirming";
 export type PaymentFlowStatus =
@@ -54,12 +54,67 @@ export default function PaymentStatusModal({
 
   const isTerminal = status === "success" || status === "error";
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!isOpen) return;
 
     setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
+  }, [isOpen]);
+
+  // Focus trap and focus-return (#597)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const active = document.activeElement;
+    returnFocusRef.current = active instanceof HTMLElement ? active : null;
+
+    const frame = window.requestAnimationFrame(() => {
+      const focusable = getFocusableElements(dialogRef.current);
+      const target = focusable[0] ?? dialogRef.current;
+      target?.focus();
+    });
+
+    const handleTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusableElements(dialogRef.current);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const current = document.activeElement;
+
+      if (event.shiftKey) {
+        if (!current || !dialogRef.current?.contains(current) || current === first) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+
+      if (!current || !dialogRef.current?.contains(current) || current === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleTab);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleTab);
+      const target = returnFocusRef.current;
+      if (target) {
+        window.setTimeout(() => target.focus(), 0);
+      }
+    };
   }, [isOpen]);
 
   useEffect(() => {
@@ -97,10 +152,12 @@ export default function PaymentStatusModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="payment-status-title"
-        className="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-900/95 shadow-2xl"
+        tabIndex={-1}
+        className="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-900/95 shadow-2xl outline-none"
       >
         <div className="border-b border-white/10 px-6 py-5">
           <div className="flex items-start justify-between gap-4">
@@ -348,6 +405,22 @@ function StepIcon({
   if (id === "signing") return <SignatureIcon className="h-4 w-4 text-slate-300" />;
   if (id === "submitting") return <UploadIcon className="h-4 w-4 text-slate-300" />;
   return <SparklesIcon className="h-4 w-4 text-slate-300" />;
+}
+
+function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  const selector = [
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",");
+  return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter((el) => {
+    const style = window.getComputedStyle(el);
+    return style.visibility !== "hidden" && style.display !== "none";
+  });
 }
 
 function CheckIcon({ className }: { className?: string }) {
