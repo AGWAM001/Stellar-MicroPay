@@ -799,29 +799,76 @@ export default function SettingsPage({
                 </div>
               </div>
             )}
-
-            {/* Help & Onboarding — manually re-trigger the dashboard tour (#621) */}
+            {/* Stellar Name Service section */}
             <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">
-                Help & Onboarding
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
+                <svg className="w-5 h-5 text-stellar-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 005 0" />
+                </svg>
+                Stellar Name Service
               </h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                Replay the guided tour that highlights your balance, the send form, and transaction history.
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                Register a human-readable name like <strong className="text-slate-700 dark:text-slate-200">alice.xlm</strong> so others can send you
+                payments without needing your full <code className="text-xs bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">G…</code> address.
               </p>
-              <button
-                onClick={handleReplayTour}
-                className="px-4 py-2 bg-stellar-500 hover:bg-stellar-600 text-white font-medium rounded-lg transition-colors"
-              >
-                Replay onboarding tour
-              </button>
-              {tourResetMessage && (
-                <p className="text-sm text-emerald-500 dark:text-emerald-400 mt-3">
-                  {tourResetMessage}{" "}
-                  <Link href="/dashboard" className="underline hover:no-underline">
-                    Go to dashboard →
-                  </Link>
+
+              {/* How it works */}
+              <div className="mb-5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-cosmos-900 p-4 space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                <p className="font-medium text-slate-800 dark:text-slate-200">How it works</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>
+                    Names like <span className="font-mono text-xs">alice.xlm</span> are resolved via the{" "}
+                    <strong>Stellar Federation protocol</strong> — the same standard built into
+                    every Stellar wallet.
+                  </li>
+                  <li>
+                    Registration is managed by{" "}
+                    <a
+                      href="https://stellarnames.org"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-stellar-400 hover:text-stellar-300 underline underline-offset-2"
+                    >
+                      StellarNames.org
+                    </a>{" "}
+                    — a community-run federation server for the{" "}
+                    <span className="font-mono text-xs">.xlm</span> namespace.
+                  </li>
+                  <li>
+                    Once registered, anyone can type your name in the Send Payment form and it
+                    will automatically resolve to your address.
+                  </li>
+                  <li>
+                    Resolution is cached locally for 10 minutes to keep things snappy.
+                  </li>
+                </ul>
+              </div>
+
+              {publicKey && (
+                <p className="mb-4 text-xs text-slate-400 dark:text-slate-500 break-all">
+                  Your wallet address:{" "}
+                  <span className="font-mono text-slate-600 dark:text-slate-300">{publicKey}</span>
                 </p>
               )}
+
+              <a
+                href="https://stellarnames.org"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg bg-stellar-500 px-4 py-2 text-sm font-medium text-white hover:bg-stellar-600 transition-colors"
+              >
+                Register your name on StellarNames
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+
+              <p className="mt-3 text-xs text-slate-400 dark:text-slate-500">
+                Note: resolution depends on the recipient&apos;s domain publishing a valid{" "}
+                <span className="font-mono text-xs">stellar.toml</span>. Names not registered with
+                a federation server will fail to resolve.
+              </p>
             </div>
           </div>
         </main>
@@ -862,28 +909,7 @@ export default function SettingsPage({
               </button>
             </div>
           </div>
-        
-          {/* ── Stellar Name Service ── */}
-          <div className="card">
-            <h2 className="text-lg font-semibold mb-2">Your Stellar Name</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              Register a human-readable name (e.g. <strong>alice.xlm</strong>) that others can use to send you payments instead of your full address.
-            </p>
-            {publicKey && (
-              <p className="text-xs text-gray-400 mb-4 break-all">
-                Your address: <span className="font-mono">{publicKey}</span>
-              </p>
-            )}
-            <a
-              href="https://stellarnames.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-primary"
-            >
-              Register your name on StellarNames →
-            </a>
-          </div>
-</div>
+        </div>
       )}
     </>
   );

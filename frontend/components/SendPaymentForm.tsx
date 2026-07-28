@@ -20,7 +20,9 @@ import {
   fetchNetworkFeeStats,
   isValidFederationAddress,
   isValidStellarAddress,
+  isStellarName,
   resolveFederationAddress,
+  resolveStellarName,
   server,
   STELLAR_BASE_FEE_XLM,
   STELLAR_MEMO_TEXT_MAX_BYTES,
@@ -145,6 +147,10 @@ function SendPaymentForm({
   const [isResolvingDestination, setIsResolvingDestination] = useState(false);
   const [destinationResolutionError, setDestinationResolutionError] = useState<string | null>(null);
   const [resolvedPaymentDestination, setResolvedPaymentDestination] = useState<string | null>(null);
+  // SNS inline resolution state: tracks the resolved address shown below the
+  // destination field when a .xlm name or federation address is entered.
+  const [snsResolvedAddress, setSnsResolvedAddress] = useState<string | null>(null);
+  const [snsResolving, setSnsResolving] = useState(false);
   const [customAsset, setCustomAsset] = useState<CustomAsset>({ code: "", issuer: "" });
   const [showCustomAssetForm, setShowCustomAssetForm] = useState(false);
   const [selectedMemoTemplate, setSelectedMemoTemplate] = useState<string | null>(null);
@@ -173,8 +179,7 @@ function SendPaymentForm({
   const frameRequestRef = useRef<number | null>(null);
   const isDetectingRef = useRef(false);
   const destinationInputRef = useRef<HTMLInputElement | null>(null);
-  const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const destinationValidationRequestRef = useRef(0);
+  const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Power-user shortcut: press "S" (when not already typing in a field and no
   // modal is open) to jump focus to the destination input (#264).
@@ -366,12 +371,48 @@ function SendPaymentForm({
     setResolvedPaymentDestination(null);
   }, [prefill]);
 
-  const validateDestinationAccount = useCallback((address: string) => {
-    const trimmedAddress = address.trim();
-    const requestId = destinationValidationRequestRef.current + 1;
-    destinationValidationRequestRef.current = requestId;
+  // Debounced SNS resolution — fires 400ms after the user stops typing a
+  // .xlm name or federation address.  Shows an inline spinner during lookup
+  // and the resolved G... address (or an error) below the destination field.
+  useEffect(() => {
+    if (snsDebounceRef.current) clearTimeout(snsDebounceRef.current);
 
-    if (!isValidStellarAddress(trimmedAddress)) {
+    const trimmed = destination.trim();
+
+    // Only trigger for SNS/federation names — raw addresses and usernames are
+    // handled elsewhere.
+    if (!isStellarName(trimmed)) {
+      setSnsResolvedAddress(null);
+      setSnsResolving(false);
+      return;
+    }
+
+    setSnsResolving(true);
+    setSnsResolvedAddress(null);
+    setDestinationResolutionError(null);
+
+    snsDebounceRef.current = setTimeout(async () => {
+      try {
+        const resolved = await resolveStellarName(trimmed);
+        setSnsResolvedAddress(resolved);
+        setDestinationResolutionError(null);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not resolve name";
+        setDestinationResolutionError(message);
+        setSnsResolvedAddress(null);
+      } finally {
+        setSnsResolving(false);
+      }
+    }, 400);
+
+    return () => {
+      if (snsDebounceRef.current) clearTimeout(snsDebounceRef.current);
+    };
+  }, [destination]);
+
+  // Pre-validate destination account existence on the Stellar network (#294)
+  useEffect(() => {
+    if (!isValidStellarAddress(destination)) {
       setDestAccountWarning(null);
       setIsCheckingDest(false);
       return;
@@ -460,8 +501,9 @@ function SendPaymentForm({
   const isMemoValid = memoBytes <= 28;
   
   const canSubmit =
-    (isValidDest || isFederationDestination || isUsernameDestination) &&
+    (isValidDest || isFederationDestination || isUsernameDestination || (isStellarName(trimmedDestination) && !!snsResolvedAddress)) &&
     !isResolvingDestination &&
+    !snsResolving &&
     !destinationResolutionError &&
     isValidAmt &&
     status === "idle" &&
@@ -496,10 +538,20 @@ function SendPaymentForm({
       return trimmedDestination;
     }
 
+    // If we already resolved a SNS name in the debounced effect, use that
+    // result directly — never submit the raw name string.
+    if (isStellarName(trimmedDestination) && snsResolvedAddress) {
+      return snsResolvedAddress;
+    }
+
     setIsResolvingDestination(true);
     try {
       if (isFederationDestination) {
         return await resolveFederationAddress(trimmedDestination);
+      }
+
+      if (isStellarName(trimmedDestination)) {
+        return await resolveStellarName(trimmedDestination);
       }
 
       if (isUsernameDestination) {
@@ -529,6 +581,7 @@ function SendPaymentForm({
     setDestination(address);
     setDestinationResolutionError(null);
     setResolvedPaymentDestination(null);
+    setSnsResolvedAddress(null);
     setIsContactsDropdownOpen(false);
   };
 
@@ -573,6 +626,7 @@ function SendPaymentForm({
       setAmount("");
       setMemo("");
       setResolvedPaymentDestination(null);
+      setSnsResolvedAddress(null);
     }
     setStatus("idle");
   };
@@ -877,6 +931,7 @@ function SendPaymentForm({
                 setDestination(e.target.value);
                 setDestinationResolutionError(null);
                 setResolvedPaymentDestination(null);
+                setSnsResolvedAddress(null);
                 setDestAccountWarning(null);
                 setIsContactsDropdownOpen(true);
               }}
@@ -896,6 +951,19 @@ function SendPaymentForm({
 
             {destinationResolutionError && (
               <p className="mt-2 text-xs text-red-400">{destinationResolutionError}</p>
+            )}
+
+            {/* SNS resolution feedback */}
+            {snsResolving && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400" aria-live="polite" aria-label="Resolving name">
+                <div className="h-3 w-3 animate-spin rounded-full border border-stellar-400 border-t-transparent" />
+                <span>Resolving name…</span>
+              </div>
+            )}
+            {!snsResolving && snsResolvedAddress && (
+              <p className="mt-2 text-xs text-emerald-400" aria-live="polite">
+                Resolves to: <span className="font-mono">{snsResolvedAddress}</span>
+              </p>
             )}
 
             {/* Destination account existence warning (#294) */}
