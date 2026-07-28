@@ -18,7 +18,7 @@ const PERSISTENT_BUMP_AMOUNT: u32 = 500_000;
 /// Bump this whenever a stored struct (`Stream`, `Escrow`, …) or a `DataKey`
 /// variant changes shape, and add the corresponding step to the migration
 /// table in the contract README (#562).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Smallest deposit `open_stream` accepts, in stroops (0.001 XLM against the
 /// native SAC).
@@ -92,20 +92,34 @@ pub struct Escrow {
     pub status: EscrowStatus,
 }
 
-/// A continuous payment channel: `payer` locks `deposited` up front and the
-/// recipient accrues `rate_per_ledger` for every ledger the stream is running.
+/// One recipient's share of a stream's payout (#559).
 ///
-/// Accrual is derived, never stored — `claimed` is the only mutable money
-/// field, which is what keeps `claimed <= deposited` checkable at any point
-/// (#557).
+/// `weight` is unit-less — a recipient's entitlement is
+/// `weight / sum(all weights on the stream)`. `claimed` is that recipient's
+/// own running total, which is what keeps per-recipient payouts independent
+/// of the order recipients claim in.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StreamRecipient {
+    pub recipient: Address,
+    pub weight: u32,
+    pub claimed: i128,
+}
+
+/// A continuous payment channel: `payer` locks `deposited` up front and the
+/// stream accrues `rate_per_ledger` for every ledger it is running, split
+/// across `recipients` by weight (#559).
+///
+/// Accrual is derived, never stored — each recipient's `claimed` is the only
+/// mutable money field, which is what keeps `sum(claimed) <= deposited`
+/// checkable at any point (#557).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Stream {
     pub payer: Address,
-    pub recipient: Address,
+    pub recipients: soroban_sdk::Vec<StreamRecipient>,
     pub rate_per_ledger: i128,
     pub deposited: i128,
-    pub claimed: i128,
     pub start_ledger: u32,
     /// Token contract the deposit is denominated in.
     pub token: Address,
@@ -119,6 +133,32 @@ pub struct Stream {
     pub closed: bool,
 }
 
+/// Index of `recipients[i].recipient == addr`, if `addr` is on the stream.
+fn find_recipient(recipients: &soroban_sdk::Vec<StreamRecipient>, addr: &Address) -> Option<u32> {
+    for i in 0..recipients.len() {
+        if &recipients.get(i).unwrap().recipient == addr {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn total_weight(recipients: &soroban_sdk::Vec<StreamRecipient>) -> u32 {
+    let mut total: u32 = 0;
+    for i in 0..recipients.len() {
+        total = total.saturating_add(recipients.get(i).unwrap().weight);
+    }
+    total
+}
+
+fn total_claimed(recipients: &soroban_sdk::Vec<StreamRecipient>) -> i128 {
+    let mut total: i128 = 0;
+    for i in 0..recipients.len() {
+        total += recipients.get(i).unwrap().claimed;
+    }
+    total
+}
+
 /// Total ledgers this stream has spent paused, including an in-progress pause.
 fn paused_ledgers_total(stream: &Stream, current_ledger: u32) -> u32 {
     if stream.paused {
@@ -129,22 +169,16 @@ fn paused_ledgers_total(stream: &Stream, current_ledger: u32) -> u32 {
     }
 }
 
-/// Amount the recipient can withdraw right now.
+/// Total amount streamed to *all* recipients combined, as of `current_ledger`.
 ///
-/// While a stream is paused the accrual window stops growing, so this stays
-/// flat until `resume_stream` — and after the resume it picks up exactly where
-/// it left off, because the pause length is folded into `paused_ledgers`.
-fn claimable_amount(stream: &Stream, current_ledger: u32) -> i128 {
-    if stream.closed {
-        return 0;
-    }
+/// Cap the accrual window at the ledger where the deposit runs out. That
+/// keeps the multiplication below bounded by `deposited` (so it can never
+/// overflow i128) and enforces `total_streamed <= deposited` structurally
+/// rather than by an after-the-fact clamp.
+fn total_streamed_amount(stream: &Stream, current_ledger: u32) -> i128 {
     let paused = paused_ledgers_total(stream, current_ledger);
     let elapsed_ledgers = current_ledger.saturating_sub(stream.start_ledger).saturating_sub(paused);
 
-    // Cap the accrual window at the ledger where the deposit runs out. That
-    // keeps the multiplication below bounded by `deposited` (so it can never
-    // overflow i128) and enforces `total_streamed <= deposited` structurally
-    // rather than by an after-the-fact clamp.
     let funded_ledgers = stream.deposited / stream.rate_per_ledger;
     let elapsed_ledgers = if i128::from(elapsed_ledgers) > funded_ledgers {
         funded_ledgers as u32
@@ -152,8 +186,29 @@ fn claimable_amount(stream: &Stream, current_ledger: u32) -> i128 {
         elapsed_ledgers
     };
 
-    let total_streamed = stream.rate_per_ledger * elapsed_ledgers as i128;
-    let claimable = total_streamed - stream.claimed;
+    stream.rate_per_ledger * elapsed_ledgers as i128
+}
+
+/// Amount `recipient` can withdraw right now: their weighted share of the
+/// total streamed so far, minus what they have already claimed (#559).
+///
+/// While a stream is paused the accrual window stops growing, so this stays
+/// flat until `resume_stream` — and after the resume it picks up exactly where
+/// it left off, because the pause length is folded into `paused_ledgers`.
+fn claimable_amount(stream: &Stream, recipient: &Address, current_ledger: u32) -> i128 {
+    if stream.closed {
+        return 0;
+    }
+    let Some(idx) = find_recipient(&stream.recipients, recipient) else {
+        return 0;
+    };
+    let entry = stream.recipients.get(idx).unwrap();
+
+    let total_streamed = total_streamed_amount(stream, current_ledger);
+    let weight_total = total_weight(&stream.recipients);
+    let entitled = total_streamed * i128::from(entry.weight) / i128::from(weight_total);
+
+    let claimable = entitled - entry.claimed;
     if claimable > 0 {
         claimable
     } else {
@@ -577,7 +632,9 @@ impl MicroPayContract {
 
     // ─── Streaming payments ─────────────────────────────────────────────────
 
-    /// Open a payment stream, locking `deposit` in the contract.
+    /// Open a payment stream, locking `deposit` in the contract and splitting
+    /// its payout across `recipients` by the matching entry in `weights`
+    /// (#559). A single recipient is just a one-element list.
     ///
     /// Returns the new stream id. Rejects dust streams: the deposit must be at
     /// least `MIN_STREAM_DEPOSIT` and must fund at least
@@ -586,11 +643,23 @@ impl MicroPayContract {
         env: Env,
         token_address: Address,
         payer: Address,
-        recipient: Address,
+        recipients: soroban_sdk::Vec<Address>,
+        weights: soroban_sdk::Vec<u32>,
         rate_per_ledger: i128,
         deposit: i128,
     ) -> u32 {
         payer.require_auth();
+        if recipients.len() != weights.len() {
+            panic!("recipients and weights must have equal length");
+        }
+        if recipients.is_empty() {
+            panic!("at least one recipient is required");
+        }
+        for i in 0..weights.len() {
+            if weights.get(i).unwrap() == 0 {
+                panic!("weight must be positive");
+            }
+        }
         if rate_per_ledger <= 0 {
             panic!("rate_per_ledger must be positive");
         }
@@ -612,6 +681,15 @@ impl MicroPayContract {
         let token = token::Client::new(&env, &token_address);
         token.transfer(&payer, &env.current_contract_address(), &deposit);
 
+        let mut stream_recipients = soroban_sdk::Vec::new(&env);
+        for i in 0..recipients.len() {
+            stream_recipients.push_back(StreamRecipient {
+                recipient: recipients.get(i).unwrap(),
+                weight: weights.get(i).unwrap(),
+                claimed: 0,
+            });
+        }
+
         let stream_id: u32 = env
             .storage()
             .persistent()
@@ -619,10 +697,9 @@ impl MicroPayContract {
             .unwrap_or(0);
         let stream = Stream {
             payer: payer.clone(),
-            recipient: recipient.clone(),
+            recipients: stream_recipients,
             rate_per_ledger,
             deposited: deposit,
-            claimed: 0,
             start_ledger: env.ledger().sequence(),
             token: token_address,
             paused: false,
@@ -642,29 +719,32 @@ impl MicroPayContract {
 
         env.events().publish(
             (Symbol::new(&env, "stream_open"), stream_id),
-            (payer, recipient, rate_per_ledger, deposit),
+            (payer, recipients, rate_per_ledger, deposit),
         );
         stream_id
     }
 
-    /// Withdraw everything accrued so far. Returns the amount transferred,
-    /// which is `0` when nothing has accrued since the last claim.
+    /// Withdraw everything accrued so far for the calling recipient's weighted
+    /// share (#559). Returns the amount transferred, which is `0` when
+    /// nothing has accrued since that recipient's last claim.
     pub fn claim_stream(env: Env, stream_id: u32, recipient: Address) -> i128 {
         recipient.require_auth();
         let mut stream = load_stream(&env, stream_id);
-        if stream.recipient != recipient {
+        let Some(idx) = find_recipient(&stream.recipients, &recipient) else {
             panic!("unauthorized");
-        }
+        };
         if stream.closed {
             panic!("stream is closed");
         }
 
-        let amount = claimable_amount(&stream, env.ledger().sequence());
+        let amount = claimable_amount(&stream, &recipient, env.ledger().sequence());
         if amount == 0 {
             return 0;
         }
 
-        stream.claimed += amount;
+        let mut entry = stream.recipients.get(idx).unwrap();
+        entry.claimed += amount;
+        stream.recipients.set(idx, entry);
         save_stream(&env, stream_id, &stream);
 
         let token = token::Client::new(&env, &stream.token);
@@ -753,8 +833,8 @@ impl MicroPayContract {
         );
     }
 
-    /// Stop a stream: settle everything accrued to the recipient and refund
-    /// the unstreamed remainder to the payer.
+    /// Stop a stream: settle everything accrued to each recipient by weight
+    /// (#559) and refund the unstreamed remainder to the payer.
     pub fn close_stream(env: Env, stream_id: u32, payer: Address) {
         payer.require_auth();
         let mut stream = load_stream(&env, stream_id);
@@ -765,19 +845,35 @@ impl MicroPayContract {
             panic!("stream is closed");
         }
 
-        let owed = claimable_amount(&stream, env.ledger().sequence());
-        stream.claimed += owed;
-        let refund = stream.deposited - stream.claimed;
+        let current_ledger = env.ledger().sequence();
+        let total_streamed = total_streamed_amount(&stream, current_ledger);
+        let weight_total = total_weight(&stream.recipients);
+
+        let token = token::Client::new(&env, &stream.token);
+        let contract_address = env.current_contract_address();
+
+        let mut recipients = stream.recipients.clone();
+        let mut owed: i128 = 0;
+        for i in 0..recipients.len() {
+            let mut entry = recipients.get(i).unwrap();
+            let entitled = total_streamed * i128::from(entry.weight) / i128::from(weight_total);
+            let share = entitled - entry.claimed;
+            if share > 0 {
+                entry.claimed += share;
+                owed += share;
+                recipients.set(i, entry.clone());
+                token.transfer(&contract_address, &entry.recipient, &share);
+            }
+        }
+        stream.recipients = recipients;
+
+        let refund = stream.deposited - total_claimed(&stream.recipients);
         stream.closed = true;
         stream.paused = false;
         save_stream(&env, stream_id, &stream);
 
-        let token = token::Client::new(&env, &stream.token);
-        if owed > 0 {
-            token.transfer(&env.current_contract_address(), &stream.recipient, &owed);
-        }
         if refund > 0 {
-            token.transfer(&env.current_contract_address(), &payer, &refund);
+            token.transfer(&contract_address, &payer, &refund);
         }
 
         env.events()
@@ -794,9 +890,13 @@ impl MicroPayContract {
         stream
     }
 
-    pub fn get_claimable(env: Env, stream_id: u32) -> i128 {
+    /// Amount `recipient` could withdraw from `stream_id` at the current
+    /// ledger — their weighted share of accrual, net of paused time and
+    /// capped at the deposit. `0` for a closed stream or an address that is
+    /// not one of the stream's recipients.
+    pub fn get_claimable(env: Env, stream_id: u32, recipient: Address) -> i128 {
         let stream = load_stream(&env, stream_id);
-        claimable_amount(&stream, env.ledger().sequence())
+        claimable_amount(&stream, &recipient, env.ledger().sequence())
     }
 
     pub fn get_stream_count(env: Env) -> u32 {
@@ -869,6 +969,9 @@ impl MicroPayContract {
 
 #[cfg(test)]
 mod benchmarks;
+
+#[cfg(test)]
+mod fuzz_streams;
 
 #[cfg(test)]
 mod tests {
@@ -1293,13 +1396,40 @@ mod tests {
         (contract_id, client, token_id, payer, recipient)
     }
 
+    /// Open a stream with a single recipient holding the entire weight — the
+    /// pre-#559 API shape, kept as a helper so the bulk of these tests do not
+    /// need to build a `(recipients, weights)` pair by hand.
+    fn open_single_stream(
+        env: &Env,
+        client: &MicroPayContractClient,
+        token_id: &Address,
+        payer: &Address,
+        recipient: &Address,
+        rate_per_ledger: i128,
+        deposit: i128,
+    ) -> u32 {
+        client.open_stream(
+            token_id,
+            payer,
+            &soroban_sdk::vec![env, recipient.clone()],
+            &soroban_sdk::vec![env, 1u32],
+            &rate_per_ledger,
+            &deposit,
+        )
+    }
+
+    /// The sole recipient's claimed amount on a single-recipient stream.
+    fn claimed_of(stream: &Stream) -> i128 {
+        stream.recipients.get(0).unwrap().claimed
+    }
+
     #[test]
     fn test_open_stream() {
         let env = Env::default();
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
 
         assert_eq!(id, 0);
         assert_eq!(client.get_stream_count(), 1);
@@ -1311,10 +1441,12 @@ mod tests {
 
         let stream = client.get_stream(&id);
         assert_eq!(stream.payer, payer);
-        assert_eq!(stream.recipient, recipient);
+        assert_eq!(stream.recipients.len(), 1);
+        assert_eq!(stream.recipients.get(0).unwrap().recipient, recipient);
+        assert_eq!(stream.recipients.get(0).unwrap().weight, 1);
         assert_eq!(stream.rate_per_ledger, RATE);
         assert_eq!(stream.deposited, DEPOSIT);
-        assert_eq!(stream.claimed, 0);
+        assert_eq!(claimed_of(&stream), 0);
         assert_eq!(stream.start_ledger, env.ledger().sequence());
         assert!(!stream.paused);
         assert!(!stream.closed);
@@ -1326,7 +1458,7 @@ mod tests {
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 10);
 
         let claimed = client.claim_stream(&id, &recipient);
@@ -1334,7 +1466,7 @@ mod tests {
         assert_eq!(claimed, RATE * 10);
         assert_eq!(token.balance(&recipient), RATE * 10);
         assert_eq!(token.balance(&contract_id), DEPOSIT - RATE * 10);
-        assert_eq!(client.get_stream(&id).claimed, RATE * 10);
+        assert_eq!(claimed_of(&client.get_stream(&id)), RATE * 10);
     }
 
     #[test]
@@ -1343,7 +1475,7 @@ mod tests {
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
 
         advance_by(&env, 5);
         assert_eq!(client.claim_stream(&id, &recipient), RATE * 5);
@@ -1354,7 +1486,7 @@ mod tests {
         assert_eq!(client.claim_stream(&id, &recipient), 0);
 
         assert_eq!(token.balance(&recipient), RATE * 12);
-        assert_eq!(client.get_stream(&id).claimed, RATE * 12);
+        assert_eq!(claimed_of(&client.get_stream(&id)), RATE * 12);
     }
 
     #[test]
@@ -1363,19 +1495,19 @@ mod tests {
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
 
         // Run far past the funded window: accrual stops at the deposit.
         advance_by(&env, 10_000);
 
-        assert_eq!(client.get_claimable(&id), DEPOSIT);
+        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
         assert_eq!(client.claim_stream(&id, &recipient), DEPOSIT);
         assert_eq!(client.claim_stream(&id, &recipient), 0);
         assert_eq!(token.balance(&recipient), DEPOSIT);
         assert_eq!(token.balance(&contract_id), 0);
 
         let stream = client.get_stream(&id);
-        assert_eq!(stream.claimed, stream.deposited);
+        assert_eq!(claimed_of(&stream), stream.deposited);
     }
 
     #[test]
@@ -1385,9 +1517,9 @@ mod tests {
             stream_fixture(&env, DEPOSIT * 2);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 1_000); // Drain the original runway exactly.
-        assert_eq!(client.get_claimable(&id), DEPOSIT);
+        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
 
         client.top_up_stream(&id, &payer, &DEPOSIT);
 
@@ -1395,9 +1527,9 @@ mod tests {
         assert_eq!(token.balance(&contract_id), DEPOSIT * 2);
 
         // The top-up extends the runway rather than paying out immediately.
-        assert_eq!(client.get_claimable(&id), DEPOSIT);
+        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
         advance_by(&env, 10);
-        assert_eq!(client.get_claimable(&id), DEPOSIT + RATE * 10);
+        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT + RATE * 10);
     }
 
     #[test]
@@ -1406,7 +1538,7 @@ mod tests {
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 20);
         client.close_stream(&id, &payer);
 
@@ -1417,8 +1549,42 @@ mod tests {
 
         let stream = client.get_stream(&id);
         assert!(stream.closed);
-        assert_eq!(stream.claimed, streamed);
-        assert_eq!(client.get_claimable(&id), 0);
+        assert_eq!(claimed_of(&stream), streamed);
+        assert_eq!(client.get_claimable(&id, &recipient), 0);
+    }
+
+    /// #558 — close_stream must emit an event carrying the stream id and the
+    /// refunded amount, not just return them, so off-chain indexers can track
+    /// closures without polling.
+    #[test]
+    fn test_close_stream_emits_event_with_refund() {
+        use soroban_sdk::{testutils::Events, vec, IntoVal};
+
+        let env = Env::default();
+        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
+        advance_by(&env, 20);
+        client.close_stream(&id, &payer);
+
+        let streamed = RATE * 20;
+        let refund = DEPOSIT - streamed;
+
+        // close_stream also triggers token-contract transfer events, so check
+        // just the last published event (ours) rather than the full list.
+        let all_events = env.events().all();
+        let last_event = all_events.slice(all_events.len() - 1..);
+        assert_eq!(
+            last_event,
+            vec![
+                &env,
+                (
+                    contract_id,
+                    (Symbol::new(&env, "stream_close"), id).into_val(&env),
+                    (streamed, refund).into_val(&env),
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1427,7 +1593,7 @@ mod tests {
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 30);
         client.claim_stream(&id, &recipient);
         advance_by(&env, 20);
@@ -1439,7 +1605,7 @@ mod tests {
         assert_eq!(token.balance(&recipient), streamed);
         assert_eq!(token.balance(&payer), DEPOSIT - streamed);
         assert_eq!(token.balance(&contract_id), 0);
-        assert_eq!(client.get_stream(&id).claimed, streamed);
+        assert_eq!(claimed_of(&client.get_stream(&id)), streamed);
     }
 
     #[test]
@@ -1447,14 +1613,14 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
-        assert_eq!(client.get_claimable(&id), 0);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
+        assert_eq!(client.get_claimable(&id, &recipient), 0);
 
         advance_by(&env, 3);
-        assert_eq!(client.get_claimable(&id), RATE * 3);
+        assert_eq!(client.get_claimable(&id, &recipient), RATE * 3);
 
         client.claim_stream(&id, &recipient);
-        assert_eq!(client.get_claimable(&id), 0);
+        assert_eq!(client.get_claimable(&id, &recipient), 0);
     }
 
     #[test]
@@ -1471,7 +1637,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 10);
 
         let stranger = Address::generate(&env);
@@ -1484,7 +1650,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
 
         let stranger = Address::generate(&env);
         client.close_stream(&id, &stranger);
@@ -1495,7 +1661,7 @@ mod tests {
     fn test_invalid_rate() {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        client.open_stream(&token_id, &payer, &recipient, &0i128, &DEPOSIT);
+        open_single_stream(&env, &client, &token_id, &payer, &recipient, 0i128, DEPOSIT);
     }
 
     #[test]
@@ -1503,7 +1669,7 @@ mod tests {
     fn test_invalid_deposit() {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        client.open_stream(&token_id, &payer, &recipient, &RATE, &0i128);
+        open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, 0i128);
     }
 
     // ── Dust-stream validation (#561) ───────────────────────────────────────
@@ -1514,7 +1680,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let dust = MIN_STREAM_DEPOSIT - 1;
-        client.open_stream(&token_id, &payer, &recipient, &1i128, &dust);
+        open_single_stream(&env, &client, &token_id, &payer, &recipient, 1i128, dust);
     }
 
     #[test]
@@ -1523,7 +1689,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         // Deposit clears the minimum, but this rate drains it in 10 ledgers.
-        client.open_stream(&token_id, &payer, &recipient, &1_000i128, &10_000i128);
+        open_single_stream(&env, &client, &token_id, &payer, &recipient, 1_000i128, 10_000i128);
     }
 
     #[test]
@@ -1532,7 +1698,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         // rate > deposit funds zero whole ledgers.
-        client.open_stream(&token_id, &payer, &recipient, &20_000i128, &10_000i128);
+        open_single_stream(&env, &client, &token_id, &payer, &recipient, 20_000i128, 10_000i128);
     }
 
     #[test]
@@ -1540,8 +1706,164 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, MIN_STREAM_DEPOSIT);
         // 10_000 / 166 == 60 ledgers, exactly MIN_STREAM_DURATION_LEDGERS.
-        let id = client.open_stream(&token_id, &payer, &recipient, &166i128, &MIN_STREAM_DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, 166i128, MIN_STREAM_DEPOSIT);
         assert_eq!(client.get_stream(&id).deposited, MIN_STREAM_DEPOSIT);
+    }
+
+    // ── Multi-recipient streams (#559) ──────────────────────────────────────
+
+    #[test]
+    fn test_open_stream_multiple_recipients_records_shares() {
+        let env = Env::default();
+        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+        let second = Address::generate(&env);
+
+        let id = client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
+            &soroban_sdk::vec![&env, 1u32, 3u32],
+            &RATE,
+            &DEPOSIT,
+        );
+
+        let stream = client.get_stream(&id);
+        assert_eq!(stream.recipients.len(), 2);
+        assert_eq!(stream.recipients.get(0).unwrap().recipient, recipient);
+        assert_eq!(stream.recipients.get(0).unwrap().weight, 1);
+        assert_eq!(stream.recipients.get(1).unwrap().recipient, second);
+        assert_eq!(stream.recipients.get(1).unwrap().weight, 3);
+    }
+
+    #[test]
+    fn test_claim_stream_multiple_recipients_pays_proportionally() {
+        let env = Env::default();
+        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+        let token = token::Client::new(&env, &token_id);
+        let second = Address::generate(&env);
+
+        // Weights 1:3 — `recipient` gets a quarter of accrual, `second` gets
+        // three quarters.
+        let id = client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
+            &soroban_sdk::vec![&env, 1u32, 3u32],
+            &RATE,
+            &DEPOSIT,
+        );
+        advance_by(&env, 40);
+
+        assert_eq!(client.get_claimable(&id, &recipient), RATE * 40 / 4);
+        assert_eq!(client.get_claimable(&id, &second), RATE * 40 * 3 / 4);
+
+        assert_eq!(client.claim_stream(&id, &recipient), RATE * 40 / 4);
+        assert_eq!(client.claim_stream(&id, &second), RATE * 40 * 3 / 4);
+        assert_eq!(token.balance(&recipient), RATE * 40 / 4);
+        assert_eq!(token.balance(&second), RATE * 40 * 3 / 4);
+        assert_eq!(token.balance(&contract_id), DEPOSIT - RATE * 40);
+
+        // A second claim with no new accrual pays nothing, for either party.
+        assert_eq!(client.claim_stream(&id, &recipient), 0);
+        assert_eq!(client.claim_stream(&id, &second), 0);
+    }
+
+    #[test]
+    fn test_close_stream_multiple_recipients_settles_each() {
+        let env = Env::default();
+        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+        let token = token::Client::new(&env, &token_id);
+        let second = Address::generate(&env);
+
+        let id = client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
+            &soroban_sdk::vec![&env, 1u32, 1u32],
+            &RATE,
+            &DEPOSIT,
+        );
+        advance_by(&env, 30);
+        // recipient claims their half early; second never claims.
+        client.claim_stream(&id, &recipient);
+        advance_by(&env, 20);
+        client.close_stream(&id, &payer);
+
+        let streamed = RATE * 50;
+        assert_eq!(token.balance(&recipient), streamed / 2);
+        assert_eq!(token.balance(&second), streamed / 2);
+        assert_eq!(token.balance(&payer), DEPOSIT - streamed);
+        assert_eq!(token.balance(&contract_id), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_claim_rejects_address_not_on_recipient_list() {
+        let env = Env::default();
+        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+        let second = Address::generate(&env);
+
+        let id = client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient.clone(), second],
+            &soroban_sdk::vec![&env, 1u32, 1u32],
+            &RATE,
+            &DEPOSIT,
+        );
+        advance_by(&env, 10);
+
+        let stranger = Address::generate(&env);
+        client.claim_stream(&id, &stranger);
+    }
+
+    #[test]
+    #[should_panic(expected = "recipients and weights must have equal length")]
+    fn test_open_stream_rejects_mismatched_recipients_and_weights() {
+        let env = Env::default();
+        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+
+        client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient],
+            &soroban_sdk::vec![&env, 1u32, 1u32],
+            &RATE,
+            &DEPOSIT,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one recipient is required")]
+    fn test_open_stream_rejects_empty_recipients() {
+        let env = Env::default();
+        let (_, client, token_id, payer, _recipient) = stream_fixture(&env, DEPOSIT);
+
+        client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::Vec::new(&env),
+            &soroban_sdk::Vec::new(&env),
+            &RATE,
+            &DEPOSIT,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "weight must be positive")]
+    fn test_open_stream_rejects_zero_weight() {
+        let env = Env::default();
+        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+        let second = Address::generate(&env);
+
+        client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient, second],
+            &soroban_sdk::vec![&env, 1u32, 0u32],
+            &RATE,
+            &DEPOSIT,
+        );
     }
 
     // ── Pausable streams (#560) ─────────────────────────────────────────────
@@ -1551,16 +1873,16 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 10);
         client.pause_stream(&id, &payer);
 
-        let at_pause = client.get_claimable(&id);
+        let at_pause = client.get_claimable(&id, &recipient);
         assert_eq!(at_pause, RATE * 10);
 
         // 500 ledgers of paused time must not accrue anything.
         advance_by(&env, 500);
-        assert_eq!(client.get_claimable(&id), at_pause);
+        assert_eq!(client.get_claimable(&id, &recipient), at_pause);
 
         let stream = client.get_stream(&id);
         assert!(stream.paused);
@@ -1572,17 +1894,17 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 10);
         client.pause_stream(&id, &payer);
         advance_by(&env, 500);
         client.resume_stream(&id, &payer);
 
         // Resuming does not back-pay the pause…
-        assert_eq!(client.get_claimable(&id), RATE * 10);
+        assert_eq!(client.get_claimable(&id, &recipient), RATE * 10);
         // …and accrual picks up from where it stopped.
         advance_by(&env, 10);
-        assert_eq!(client.get_claimable(&id), RATE * 20);
+        assert_eq!(client.get_claimable(&id, &recipient), RATE * 20);
 
         let stream = client.get_stream(&id);
         assert!(!stream.paused);
@@ -1595,7 +1917,7 @@ mod tests {
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 40);
         client.pause_stream(&id, &payer);
         advance_by(&env, 200);
@@ -1612,7 +1934,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 25);
         client.pause_stream(&id, &payer);
         advance_by(&env, 100);
@@ -1627,7 +1949,7 @@ mod tests {
         let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
         let token = token::Client::new(&env, &token_id);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         advance_by(&env, 15);
         client.pause_stream(&id, &payer);
         advance_by(&env, 400);
@@ -1645,7 +1967,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         client.pause_stream(&id, &payer);
         client.pause_stream(&id, &payer);
     }
@@ -1656,7 +1978,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         client.resume_stream(&id, &payer);
     }
 
@@ -1666,7 +1988,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         client.pause_stream(&id, &recipient);
     }
 
@@ -1676,7 +1998,7 @@ mod tests {
         let env = Env::default();
         let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
 
-        let id = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
         client.close_stream(&id, &payer);
         client.pause_stream(&id, &payer);
     }
@@ -1784,7 +2106,7 @@ mod tests {
 
             let mut ids = [0u32; STREAMS];
             for id_slot in ids.iter_mut() {
-                *id_slot = client.open_stream(&token_id, &payer, &recipient, &RATE, &DEPOSIT);
+                *id_slot = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
             }
             let mut closed = [false; STREAMS];
             let mut paused = [false; STREAMS];
@@ -1833,27 +2155,28 @@ mod tests {
                 let mut outstanding: i128 = 0;
                 for (slot, stream_id) in ids.iter().enumerate() {
                     let stream = client.get_stream(stream_id);
+                    let claimed = claimed_of(&stream);
                     assert!(
-                        stream.claimed <= stream.deposited,
+                        claimed <= stream.deposited,
                         "invariant violated (seed {}, step {}, stream {}): claimed {} > deposited {}",
                         seed,
                         step,
                         slot,
-                        stream.claimed,
+                        claimed,
                         stream.deposited
                     );
                     assert!(
-                        stream.claimed >= 0,
+                        claimed >= 0,
                         "negative claimed (seed {}, step {}, stream {}): {}",
                         seed,
                         step,
                         slot,
-                        stream.claimed
+                        claimed
                     );
 
-                    let claimable = client.get_claimable(stream_id);
+                    let claimable = client.get_claimable(stream_id, &recipient);
                     assert!(
-                        claimable <= stream.deposited - stream.claimed,
+                        claimable <= stream.deposited - claimed,
                         "claimable {} exceeds remaining deposit (seed {}, step {}, stream {})",
                         claimable,
                         seed,
@@ -1862,7 +2185,7 @@ mod tests {
                     );
 
                     if !closed[slot] {
-                        outstanding += stream.deposited - stream.claimed;
+                        outstanding += stream.deposited - claimed;
                     }
                 }
 

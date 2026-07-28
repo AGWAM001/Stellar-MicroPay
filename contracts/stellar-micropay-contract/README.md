@@ -13,7 +13,7 @@ The contract is written in Rust and compiled to WebAssembly (WASM) for deploymen
 - Receipt metadata minting for payments
 - Batch tip/payment recording
 - Time-locked escrow payments
-- Streaming payments with pause/resume and dust-stream limits
+- Streaming payments with pause/resume, dust-stream limits, and multi-recipient weighted payouts
 - Storage schema versioning with a documented migration path
 
 ## Prerequisites
@@ -42,6 +42,20 @@ Output: `target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm`
 ```bash
 cargo test
 ```
+
+### Fuzz testing (#563)
+
+`src/fuzz_streams.rs` is a `proptest`-based property test that generates
+random sequences of `claim_stream` / `top_up_stream` / `close_stream` calls
+against a stream opened by `open_stream` — interleaved with random ledger
+advances and top-up amounts drawn from a much wider range than the
+hand-written tests use — and re-checks the `claimed <= deposited` invariant
+(#557) and contract solvency after every call. It runs as part of the normal
+`cargo test` job already wired into CI (`.github/workflows/ci.yml`); no
+separate nightly job is needed since it is a stable-Rust property test rather
+than a `cargo-fuzz`/libFuzzer harness. A failing case is automatically
+shrunk by `proptest` to a minimal reproduction and printed on test failure.
+Baseline runs have found no panics or overflows.
 
 ## Deploy to Testnet
 
@@ -228,18 +242,22 @@ All amounts are `i128` stroop-denominated values unless a caller explicitly pass
   - Panics with `amount must be positive` if any amount is `<= 0`.
   - Propagates token contract transfer failures, including insufficient balance, missing trustline, or token authorization failures.
 
-### `open_stream(env: Env, token_address: Address, payer: Address, recipient: Address, rate_per_ledger: i128, deposit: i128) -> u32`
+### `open_stream(env: Env, token_address: Address, payer: Address, recipients: Vec<Address>, weights: Vec<u32>, rate_per_ledger: i128, deposit: i128) -> u32`
 
 - **Parameters**:
   - `token_address: Address` - Soroban token contract the stream is denominated in.
   - `payer: Address` - account funding the stream.
-  - `recipient: Address` - account that accrues `rate_per_ledger` per ledger.
-  - `rate_per_ledger: i128` - accrual rate per ledger.
+  - `recipients: Vec<Address>` - accounts that split the stream's payout, ordered to match `weights`. A single-recipient stream is a one-element list.
+  - `weights: Vec<u32>` - each recipient's share of the payout, ordered to match `recipients`. A recipient's entitlement at any point is `weight / sum(weights)` of the total streamed so far (#559).
+  - `rate_per_ledger: i128` - combined accrual rate per ledger, split across `recipients` by weight.
   - `deposit: i128` - amount locked in the contract up front.
 - **Return value**: zero-based stream id.
 - **Authorization requirements**: `payer.require_auth()`.
-- **Events emitted**: `(stream_open, stream_id)` with `(payer, recipient, rate_per_ledger, deposit)`.
+- **Events emitted**: `(stream_open, stream_id)` with `(payer, recipients, rate_per_ledger, deposit)`.
 - **Error conditions**:
+  - Panics with `recipients and weights must have equal length` when the two lists differ in length.
+  - Panics with `at least one recipient is required` when `recipients` is empty.
+  - Panics with `weight must be positive` when any weight is `0`.
   - Panics with `rate_per_ledger must be positive` when `rate_per_ledger <= 0`.
   - Panics with `deposit must be positive` when `deposit <= 0`.
   - Panics with `deposit below minimum` when `deposit < MIN_STREAM_DEPOSIT` (10_000 stroops).
@@ -250,13 +268,13 @@ All amounts are `i128` stroop-denominated values unless a caller explicitly pass
 
 - **Parameters**:
   - `stream_id: u32` - stream to withdraw from.
-  - `recipient: Address` - the stream's recipient.
-- **Return value**: amount transferred; `0` when nothing has accrued since the last claim.
+  - `recipient: Address` - one of the stream's recipients.
+- **Return value**: amount transferred to `recipient` — their weighted share of accrual minus what they have already claimed; `0` when nothing new has accrued for them since their last claim.
 - **Authorization requirements**: `recipient.require_auth()`.
 - **Events emitted**: `(stream_claim, stream_id)` with `(recipient, amount)`.
 - **Error conditions**:
   - Panics with `stream not found` for an unknown id.
-  - Panics with `unauthorized` when the caller is not the stream's recipient.
+  - Panics with `unauthorized` when the caller is not one of the stream's recipients.
   - Panics with `stream is closed` once the stream has been closed.
 
 ### `top_up_stream(env: Env, stream_id: u32, payer: Address, amount: i128) -> ()`
@@ -305,20 +323,23 @@ never back-paid.
   - `payer: Address` - the stream's payer.
 - **Return value**: none.
 - **Authorization requirements**: `payer.require_auth()`.
-- **Events emitted**: `(stream_close, stream_id)` with `(owed, refund)`.
+- **Events emitted**: `(stream_close, stream_id)` with `(owed, refund)`, where `owed` is the combined amount paid out to all recipients during this call and `refund` is what goes back to the payer (#558).
 - **Error conditions**: `stream not found`, `unauthorized`, or `stream is closed`.
 
-Settles everything accrued to the recipient and refunds the unstreamed
-remainder to the payer in the same call.
+Settles everything accrued to each recipient by weight (#559) and refunds the
+unstreamed remainder to the payer in the same call.
 
 ### `get_stream(env: Env, stream_id: u32) -> Stream`
 
-- **Return value**: `Stream { payer, recipient, rate_per_ledger, deposited, claimed, start_ledger, token, paused, paused_at_ledger, paused_ledgers, closed }`.
+- **Return value**: `Stream { payer, recipients, rate_per_ledger, deposited, start_ledger, token, paused, paused_at_ledger, paused_ledgers, closed }`, where `recipients: Vec<StreamRecipient { recipient, weight, claimed }>` (#559).
 - **Error conditions**: panics with `stream not found` for an unknown id.
 
-### `get_claimable(env: Env, stream_id: u32) -> i128`
+### `get_claimable(env: Env, stream_id: u32, recipient: Address) -> i128`
 
-- **Return value**: amount the recipient could withdraw at the current ledger, net of paused time and capped at the deposit. `0` for a closed stream.
+- **Parameters**:
+  - `stream_id: u32` - stream to query.
+  - `recipient: Address` - the recipient whose claimable share to compute.
+- **Return value**: amount `recipient` could withdraw at the current ledger — their weighted share of accrual, net of paused time and capped at the deposit. `0` for a closed stream or an address that is not one of the stream's recipients.
 - **Error conditions**: panics with `stream not found` for an unknown id.
 
 ### `get_stream_count(env: Env) -> u32`
@@ -359,6 +380,7 @@ deployments; `migrate` advances it after an upgrade.
 | ------- | ------ |
 | `0` | Pre-versioning instances (deployed before `SchemaVersion` existed): admin, tips, receipts, escrows. |
 | `1` | Adds `Stream`, `DataKey::Stream`, `DataKey::StreamCount` and `DataKey::SchemaVersion`. |
+| `2` | `Stream.recipient: Address` and `Stream.claimed: i128` replaced by `Stream.recipients: Vec<StreamRecipient>`, splitting payout across weighted recipients (#559). |
 
 `get_schema_version()` returns `0` for any instance that has never been
 stamped, which is how a pre-versioning deployment is detected.
@@ -459,6 +481,18 @@ The Stellar Asset Contract address for native XLM on testnet:
 ```
 CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 ```
+
+## Formal Verification (#565)
+
+`contracts/certora/streaming.spec` is a Certora CVL spec documenting the
+streaming-payment invariants — `claimed <= deposited` (#557) and the
+authorization rules (only a stream's recipients can claim, only the payer can
+top up or close) — mirroring the sister project's escrow spec (Stellar
+MarketPay, `contracts/certora/escrow.spec`). The Certora Prover does not yet
+target Soroban/WASM directly, so this spec is documentation rather than a
+wired-up `certoraRun` CI job; it is the formally-notated statement of what
+`src/lib.rs` must uphold, re-checked by hand whenever the streaming logic
+changes.
 
 ## Roadmap
 

@@ -10,9 +10,12 @@
 //! measurement and prints CPU instructions + memory bytes to stderr so the
 //! numbers survive `--nocapture`. Results are recorded in BENCHMARKS.md.
 #[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    token, Address, Env, Symbol,
+    token, vec, Address, Env, Symbol,
 };
 
 #[cfg(test)]
@@ -48,8 +51,8 @@ fn create_token(env: &Env, admin: &Address, to: &Address, amount: i128) -> Addre
 #[cfg(test)]
 fn print_budget(label: &str, env: &Env) {
     let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().mem_byte_cost();
-    eprintln!("[benchmark] {label}: cpu_instructions={cpu}  mem_bytes={mem}");
+    let mem = env.budget().memory_bytes_cost();
+    std::eprintln!("[benchmark] {label}: cpu_instructions={cpu}  mem_bytes={mem}");
 }
 
 // ── open_stream ───────────────────────────────────────────────────────────────
@@ -66,7 +69,14 @@ fn benchmark_open_stream() {
     let token_id = create_token(&env, &admin, &payer, deposit);
 
     env.budget().reset_default();
-    let _stream_id = client.open_stream(&token_id, &payer, &recipient, &rate_per_ledger, &deposit);
+    let _stream_id = client.open_stream(
+        &token_id,
+        &payer,
+        &vec![&env, recipient],
+        &vec![&env, 1u32],
+        &rate_per_ledger,
+        &deposit,
+    );
     print_budget("open_stream", &env);
 }
 
@@ -83,7 +93,14 @@ fn benchmark_claim_stream() {
     let rate_per_ledger: i128 = 100;
     let token_id = create_token(&env, &admin, &payer, deposit);
 
-    let stream_id = client.open_stream(&token_id, &payer, &recipient, &rate_per_ledger, &deposit);
+    let stream_id = client.open_stream(
+        &token_id,
+        &payer,
+        &vec![&env, recipient.clone()],
+        &vec![&env, 1u32],
+        &rate_per_ledger,
+        &deposit,
+    );
 
     // Advance a few ledgers so there is something to claim.
     env.ledger().set_sequence_number(200);
@@ -107,8 +124,14 @@ fn benchmark_top_up_stream() {
     let rate_per_ledger: i128 = 100;
     let token_id = create_token(&env, &admin, &payer, initial_deposit + top_up_amount);
 
-    let stream_id =
-        client.open_stream(&token_id, &payer, &recipient, &rate_per_ledger, &initial_deposit);
+    let stream_id = client.open_stream(
+        &token_id,
+        &payer,
+        &vec![&env, recipient],
+        &vec![&env, 1u32],
+        &rate_per_ledger,
+        &initial_deposit,
+    );
 
     env.budget().reset_default();
     client.top_up_stream(&stream_id, &payer, &top_up_amount);
@@ -128,7 +151,14 @@ fn benchmark_close_stream() {
     let rate_per_ledger: i128 = 100;
     let token_id = create_token(&env, &admin, &payer, deposit);
 
-    let stream_id = client.open_stream(&token_id, &payer, &recipient, &rate_per_ledger, &deposit);
+    let stream_id = client.open_stream(
+        &token_id,
+        &payer,
+        &vec![&env, recipient],
+        &vec![&env, 1u32],
+        &rate_per_ledger,
+        &deposit,
+    );
 
     // Advance ledgers so there is an unclaimed portion to refund.
     env.ledger().set_sequence_number(150);
