@@ -1,61 +1,47 @@
-#516 [test] Add dedicated unit tests for CreatorTipsDashboard component
+#525 [test] Add unit tests for lib/useWallet.tsx hook
 Repo Avatar
 Emmy123222/Stellar-MicroPay
 Context
-CreatorTipsDashboard is currently only exercised indirectly through the dashboard page tests (dashboard-*.test.tsx). It needs isolated tests that mock its data dependencies directly.
+useWallet centralises Freighter connect/disconnect state and signing; it has no direct hook-level test (only lib/wallet.ts is tested).
 
 Relevant files
-frontend/components/CreatorTipsDashboard.tsx
+frontend/lib/useWallet.tsx
+frontend/lib/wallet.ts
 Acceptance criteria
- Renders the tips list and correct running total
- Renders an empty state with zero tips
- Renders a loading state while data is fetched
- Renders an error state if the data fetch fails
-Filed as part of a contributor-issue batch for Stellar MicroPay. Comment below if you'd like this assigned to you.
-
-
-#519 [test] Add unit tests for lib/sep0007.ts
+ connect() updates hook state with the public key on success
+ disconnect() clears wallet state
+ Public key persists across remounts if designed to
+ Signing helper delegates to lib/wallet.ts correctly
+#528 [test] Add unit tests for tipsController.js
 Repo Avatar
 Emmy123222/Stellar-MicroPay
 Context
-sep0007.ts parses/generates SEP-0007 (stellar:pay?...) deep links but has no coverage of malformed or edge-case URIs.
+tipsController (create tip, list received/sent, stats) has no dedicated test file.
 
 Relevant files
-frontend/lib/sep0007.ts
+backend/src/controllers/tipsController.js
 Acceptance criteria
- Generates a valid SEP-0007 URI from destination/amount/memo
- Parses a valid URI back into its operation params
- Malformed or unsupported operation URIs are rejected/handled
-Filed as part of a contributor-issue batch for Stellar MicroPay. Comment below if you'd like this assigned to you.
-
-#518 [test] Add unit tests for lib/auth.ts
+ Create tip validates required fields
+ List received/sent tips supports pagination params
+ Stats endpoint returns correct aggregate shape#524 [test] Add unit tests for lib/useToast.ts hook
 Repo Avatar
 Emmy123222/Stellar-MicroPay
 Context
-auth.ts implements the SEP-10 client-side challenge/response and token handling; it has no tests for token storage or expiry.
+useToast is the public hook wrapping ToastContext; it has no direct test.
 
 Relevant files
-frontend/lib/auth.ts
+frontend/lib/useToast.ts
 Acceptance criteria
- Successful challenge/response stores a token
- Expired token is treated as unauthenticated
- Logout clears the stored token
-Filed as part of a contributor-issue batch for Stellar MicroPay. Comment below if you'd like this assigned to you.
-
-
-#521 [test] Add unit tests for lib/ToastContext.tsx
+ Hook exposes show/dismiss functions
+ Calling show() surfaces a toast via the context#517 [test] Add unit tests for lib/addressBook.ts
 Repo Avatar
 Emmy123222/Stellar-MicroPay
 Context
-ToastContext provides the app-wide toast dispatch/dismiss API; it has no test verifying multiple consumers stay in sync.
+addressBook.ts manages saved contacts (add/remove/list, localStorage persistence) with no test coverage.
 
 Relevant files
-frontend/lib/ToastContext.tsx
+frontend/lib/addressBook.ts
 Acceptance criteria
- show() adds a toast to context state
- dismiss(id) removes only the targeted toast
- Multiple consumers observe the same toast list
-Filed as part of a contributor-issue batch for Stellar MicroPay. Comment below if you'd like this assigned to you.
-
-
-
+ Add contact persists to storage and appears in list()
+ Remove contact deletes it from storage
+ Duplicate address is not added twice
