@@ -24,7 +24,17 @@ const PaymentLinkGenerator = dynamic(() => import("../components/PaymentLinkGene
 const WalletConnect = dynamic(() => import("../components/WalletConnect"), { ssr: false });
 const SendPaymentForm = dynamic(() => import("../components/SendPaymentForm"), { ssr: false });
 const TransactionList = dynamic(() => import("../components/TransactionList"), { ssr: false });
-const MultiSigFlow = dynamic(() => import("../components/MultiSigFlow"), { ssr: false });
+const MultiSigFlow = dynamic(() => import("../components/MultiSigFlow"), {
+  ssr: false,
+  loading: () => (
+    <div className="card mb-6 bg-cosmos-950/80 border-white/10">
+      <div className="flex items-center gap-3 py-8 justify-center">
+        <span className="h-5 w-5 animate-spin rounded-full border-2 border-stellar-400 border-t-transparent" />
+        <span className="text-sm text-slate-400">Loading multi-sig…</span>
+      </div>
+    </div>
+  ),
+});
 const OnboardingTour = dynamic(() => import("../components/OnboardingTour"), { ssr: false });
 const BatchPaymentForm = dynamic(() => import("../components/BatchPaymentForm"), { ssr: false });
 const QRCodeModal = dynamic(() => import("../components/QRCodeModal"), { ssr: false });
@@ -69,7 +79,6 @@ import {
   getFriendBotFunding,
   waitForAccountFunding,
   ACCOUNT_NOT_FOUND_ERROR,
-  streamPayments,
   getRecentPaymentsForStats,
   getRecentPaymentsForSparkline,
   fetchAllPayments,
@@ -80,6 +89,7 @@ import { useToastContext } from "@/lib/ToastContext";
 import { getJwtToken } from "@/lib/auth";
 import { URIParseResult, uriToPrefillData } from "@/lib/sep0007";
 import { useWallet } from "@/lib/useWallet";
+import { useOnboarding } from "@/hooks/useOnboarding";
 
 interface DashboardProps {
   stellarURI?: URIParseResult | null;
@@ -150,6 +160,34 @@ function formatSnapshotTime(savedAt: number) {
   });
 }
 
+// ─── Dashboard widget drag-to-reorder (#622) ────────────────────────────────
+
+const DASHBOARD_WIDGET_IDS = ["stats", "monthlySpending", "thirtyDayVolume", "analytics"] as const;
+type DashboardWidgetId = (typeof DASHBOARD_WIDGET_IDS)[number];
+const WIDGET_ORDER_STORAGE_KEY = "stellar-micropay:dashboard-widget-order";
+
+function loadWidgetOrder(): DashboardWidgetId[] {
+  if (typeof window === "undefined") return [...DASHBOARD_WIDGET_IDS];
+
+  try {
+    const raw = window.localStorage.getItem(WIDGET_ORDER_STORAGE_KEY);
+    if (!raw) return [...DASHBOARD_WIDGET_IDS];
+    const parsed = JSON.parse(raw);
+    const isValidOrder =
+      Array.isArray(parsed) &&
+      parsed.length === DASHBOARD_WIDGET_IDS.length &&
+      DASHBOARD_WIDGET_IDS.every((id) => parsed.includes(id));
+    return isValidOrder ? (parsed as DashboardWidgetId[]) : [...DASHBOARD_WIDGET_IDS];
+  } catch {
+    return [...DASHBOARD_WIDGET_IDS];
+  }
+}
+
+function saveWidgetOrder(order: DashboardWidgetId[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(WIDGET_ORDER_STORAGE_KEY, JSON.stringify(order));
+}
+
 export default function Dashboard({ stellarURI }: DashboardProps) {
   const { publicKey } = useWallet();
   const AUTO_REFRESH_SECONDS = 30;
@@ -178,7 +216,64 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   const { addToast } = useToastContext();
   const showToast = (msg: string) => addToast(msg, "info");
   const [showQRModal, setShowQRModal] = useState(false);
-  const [showOnboardingTour, setShowOnboardingTour] = useState(false);
+  const { showTour: showOnboardingTour, completeTour: handleTourComplete, skipTour: handleTourSkip } =
+    useOnboarding(!!publicKey);
+
+  // Dashboard widget order — draggable and persisted across sessions (#622)
+  const [widgetOrder, setWidgetOrder] = useState<DashboardWidgetId[]>([...DASHBOARD_WIDGET_IDS]);
+  const [draggedWidgetId, setDraggedWidgetId] = useState<DashboardWidgetId | null>(null);
+  const [dragOverWidgetId, setDragOverWidgetId] = useState<DashboardWidgetId | null>(null);
+
+  useEffect(() => {
+    setWidgetOrder(loadWidgetOrder());
+  }, []);
+
+  const handleWidgetDragStart = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      setDraggedWidgetId(id);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+    },
+    []
+  );
+
+  const handleWidgetDragOver = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggedWidgetId && draggedWidgetId !== id) {
+        setDragOverWidgetId(id);
+      }
+    },
+    [draggedWidgetId]
+  );
+
+  const handleWidgetDragLeave = useCallback((id: DashboardWidgetId) => {
+    setDragOverWidgetId((current) => (current === id ? null : current));
+  }, []);
+
+  const handleWidgetDrop = useCallback(
+    (id: DashboardWidgetId) => (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOverWidgetId(null);
+      const sourceId = draggedWidgetId;
+      setDraggedWidgetId(null);
+      if (!sourceId || sourceId === id) return;
+
+      setWidgetOrder((current) => {
+        const next = current.filter((widgetId) => widgetId !== sourceId);
+        const targetIndex = next.indexOf(id);
+        next.splice(targetIndex, 0, sourceId);
+        saveWidgetOrder(next);
+        return next;
+      });
+    },
+    [draggedWidgetId]
+  );
+
+  const handleWidgetDragEnd = useCallback(() => {
+    setDraggedWidgetId(null);
+    setDragOverWidgetId(null);
+  }, []);
 
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK !== "mainnet";
   const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
@@ -269,6 +364,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [showBubble, setShowBubble] = useState(false);
   const [bubbleMessage, setBubbleMessage] = useState("");
+  const realtimeSourceRef = useRef<EventSource | null>(null);
+  const realtimePollRef = useRef<number | null>(null);
+  const latestPaymentIdRef = useRef<string | null>(null);
 
 
   // Fetch username for connected wallet
@@ -689,26 +787,6 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   };
 
 
-  // Onboarding tour logic
-  useEffect(() => {
-    if (publicKey) {
-      const hasSeenTour = localStorage.getItem("stellar-micropay:onboarding-completed");
-      if (!hasSeenTour) {
-        setShowOnboardingTour(true);
-      }
-    }
-  }, [publicKey]);
-
-  const handleTourComplete = () => {
-    setShowOnboardingTour(false);
-    localStorage.setItem("stellar-micropay:onboarding-completed", "true");
-  };
-
-  const handleTourSkip = () => {
-    setShowOnboardingTour(false);
-    localStorage.setItem("stellar-micropay:onboarding-completed", "true");
-  };
-
   const handlePaymentSuccess = () => {
     setTimeout(() => {
       setRefreshKey((k) => k + 1);
@@ -725,6 +803,10 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
    * Reference: https://developer.mozilla.org/en-US/docs/Web/API/Push_API
    */
   const subscribeToPush = async (): Promise<boolean> => {
+    if (!publicKey) {
+      return false;
+    }
+
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       showToast('Push notifications are not supported in this browser.');
       return false;
@@ -853,55 +935,59 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   useEffect(() => {
     if (!publicKey) return;
 
-    const unsubscribe = streamPayments(
-      publicKey,
-      async (payment) => {
-        if (payment.type === 'received') {
-          const formattedAmount = formatAsset(payment.amount, payment.asset);
-          showToast(`Received ${formattedAmount}`);
+    let cancelled = false;
+    let eventSource: EventSource | null = null;
 
-          if (notificationEnabled && Notification.permission === 'granted') {
-            if (document.visibilityState === 'hidden') {
-              // Page is not visible — use the service worker showNotification()
-              // so the OS notification tray receives it.
-              try {
-                const registration = await navigator.serviceWorker.ready;
-                await registration.showNotification('Stellar Pay — Payment received', {
-                  body: `You received ${formattedAmount}`,
-                  icon: '/favicon.svg',
-                  badge: '/favicon.svg',
-                });
-              } catch (err) {
-                console.error('showNotification failed:', err);
-              }
-            } else {
-              // Page is visible — in-app bubble is less intrusive.
-              setBubbleMessage(`You received ${formattedAmount}`);
-              setShowBubble(true);
-              setTimeout(() => setShowBubble(false), 3000);
-            }
-          }
+    const connect = async () => {
+      await primeRealtimeCursor();
+      if (cancelled) return;
 
-          // Refresh XLM balance after an incoming payment
-          try {
-            const bal = await getXLMBalance(publicKey);
-            setXlmBalance(bal);
-          } catch {
-            // keep previous balance on failure
-          }
-        }
+      stopPollingFallback();
 
-        setIncomingPayment(payment);
-      },
-      (error) => {
-        console.error('Dashboard payment stream error:', error);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+      const streamUrl = `${apiBase}/api/analytics/${encodeURIComponent(publicKey)}/stream`;
+
+      if (typeof window === "undefined" || !("EventSource" in window)) {
+        startPollingFallback();
+        return;
       }
-    );
+
+      eventSource = new EventSource(streamUrl);
+      realtimeSourceRef.current = eventSource;
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payment = JSON.parse(event.data) as PaymentRecord;
+          void handleRealtimePayment(payment);
+        } catch (error) {
+          console.error("Failed to parse realtime payment event:", error);
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (cancelled) return;
+
+        console.warn("Realtime payment stream disconnected; falling back to polling.");
+        eventSource?.close();
+        realtimeSourceRef.current = null;
+        startPollingFallback();
+      };
+
+      eventSource.onopen = () => {
+        stopPollingFallback();
+      };
+    };
+
+    void connect();
 
     return () => {
-      unsubscribe();
+      cancelled = true;
+      stopPollingFallback();
+      realtimeSourceRef.current?.close();
+      realtimeSourceRef.current = null;
+      eventSource?.close();
     };
-  }, [publicKey, showToast, notificationEnabled]);
+  }, [handleRealtimePayment, primeRealtimeCursor, publicKey, startPollingFallback, stopPollingFallback]);
 
   if (!publicKey) {
     return (
@@ -963,73 +1049,112 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         </div>
       </div>
 
-      <PaymentStatsWidget
-        stats={paymentStats}
-        loading={paymentStatsLoading}
-        error={paymentStatsError}
-        onRetry={fetchPaymentStats}
-      />
-
-      <MonthlySpendingChart 
-        data={spendingData} 
-        loading={spendingLoading}
-        onBarClick={setSelectedMonth}
-      />
-
-      {selectedMonth && (
-        <div className="mb-8 p-4 rounded-xl bg-stellar-500/5 border border-stellar-500/10 flex items-center justify-between animate-fade-in">
-          <div>
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider mb-1">
-              Selected Period: {selectedMonth.label}
-            </p>
-            <div className="flex items-center gap-6">
-              <div>
-                <span className="text-xs text-slate-400">Total Sent</span>
-                <p className="text-lg font-bold text-white">{selectedMonth.sent.toFixed(2)} XLM</p>
-              </div>
-              <div>
-                <span className="text-xs text-slate-400">Total Received</span>
-                <p className="text-lg font-bold text-stellar-400">{selectedMonth.received.toFixed(2)} XLM</p>
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setSelectedMonth(null)}
-            className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/5"
-          >
-            <CloseIcon className="w-5 h-5" />
-          </button>
-        </div>
-      )}
-
-      <ThirtyDayVolumeChart data={thirtyDayData} loading={thirtyDayLoading} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <TopRecipientsWidget recipients={topRecipients} loading={topRecipientsLoading} />
-        <div className="card flex flex-col justify-between">
-          <div>
-            <h2 className="font-display text-lg font-semibold text-white mb-2">Export Payment History</h2>
-            <p className="text-sm text-slate-400">Download your full transaction history as a CSV file.</p>
-          </div>
-          <button
-            onClick={handleExportCSV}
-            disabled={csvExporting}
-            className="mt-4 btn-secondary flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {csvExporting ? (
+      {(() => {
+        const widgetContent: Record<DashboardWidgetId, { label: string; node: React.ReactNode }> = {
+          stats: {
+            label: "Payment stats",
+            node: (
+              <PaymentStatsWidget
+                stats={paymentStats}
+                loading={paymentStatsLoading}
+                error={paymentStatsError}
+                onRetry={fetchPaymentStats}
+              />
+            ),
+          },
+          monthlySpending: {
+            label: "Monthly spending chart",
+            node: (
               <>
-                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
-                Exporting…
+                <MonthlySpendingChart
+                  data={spendingData}
+                  loading={spendingLoading}
+                  onBarClick={setSelectedMonth}
+                />
+
+                {selectedMonth && (
+                  <div className="mb-8 p-4 rounded-xl bg-stellar-500/5 border border-stellar-500/10 flex items-center justify-between animate-fade-in">
+                    <div>
+                      <p className="text-xs text-slate-400 font-medium uppercase tracking-wider mb-1">
+                        Selected Period: {selectedMonth.label}
+                      </p>
+                      <div className="flex items-center gap-6">
+                        <div>
+                          <span className="text-xs text-slate-400">Total Sent</span>
+                          <p className="text-lg font-bold text-white">{selectedMonth.sent.toFixed(2)} XLM</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400">Total Received</span>
+                          <p className="text-lg font-bold text-stellar-400">{selectedMonth.received.toFixed(2)} XLM</p>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSelectedMonth(null)}
+                      aria-label="Close month details"
+                      className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/5"
+                    >
+                      <CloseIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
               </>
-            ) : (
-              <>
-                <DownloadIcon className="w-4 h-4" />
-                Export CSV
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+            ),
+          },
+          thirtyDayVolume: {
+            label: "30-day volume chart",
+            node: <ThirtyDayVolumeChart data={thirtyDayData} loading={thirtyDayLoading} />,
+          },
+          analytics: {
+            label: "Top recipients and export",
+            node: (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <TopRecipientsWidget recipients={topRecipients} loading={topRecipientsLoading} />
+                <div className="card flex flex-col justify-between">
+                  <div>
+                    <h2 className="font-display text-lg font-semibold text-white mb-2">Export Payment History</h2>
+                    <p className="text-sm text-slate-400">Download your full transaction history as a CSV file.</p>
+                  </div>
+                  <button
+                    onClick={handleExportCSV}
+                    disabled={csvExporting}
+                    className="mt-4 btn-secondary flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {csvExporting ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+                        Exporting…
+                      </>
+                    ) : (
+                      <>
+                        <DownloadIcon className="w-4 h-4" />
+                        Export CSV
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ),
+          },
+        };
+
+        return widgetOrder.map((id) => (
+          <DraggableWidget
+            key={id}
+            id={id}
+            dragHandleLabel={widgetContent[id].label}
+            isDragging={draggedWidgetId === id}
+            isDragOver={dragOverWidgetId === id}
+            onDragStart={handleWidgetDragStart(id)}
+            onDragOver={handleWidgetDragOver(id)}
+            onDragLeave={() => handleWidgetDragLeave(id)}
+            onDrop={handleWidgetDrop(id)}
+            onDragEnd={handleWidgetDragEnd}
+          >
+            {widgetContent[id].node}
+          </DraggableWidget>
+        ));
+      })()}
 
       <div className="card mb-8 bg-gradient-to-br from-cosmos-800 to-cosmos-900 border-stellar-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-48 h-48 bg-stellar-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -1038,7 +1163,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
             <p className="label mb-1">Wallet Address</p>
             <button
               onClick={() => setAddressExpanded((x) => !x)}
-              className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-left break-all"
+              className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-start break-all"
               title={addressExpanded ? "Click to collapse" : "Click to show full address"}
             >
               {addressExpanded
@@ -1070,7 +1195,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
             </div>
           </div>
 
-          <div className="sm:text-right flex-shrink-0">
+          <div className="sm:text-end flex-shrink-0">
             <p className="label mb-1">XLM Balance</p>
             {balanceLoading ? (
               <div className="h-8 w-36 bg-white/10 rounded-lg animate-pulse" />
@@ -1080,7 +1205,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                   {parseFloat(xlmBalance).toLocaleString("en-US", {
                     maximumFractionDigits: 4,
                   })}
-                  <span className="text-stellar-400 text-xl ml-2">XLM</span>
+                  <span className="text-stellar-400 text-xl ms-2">XLM</span>
                 </div>
                 {xlmPrice !== null && (
                   <p className="text-sm text-slate-400 mt-0.5">
@@ -1105,12 +1230,12 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                   <RefreshIcon className={`w-3 h-3 ${isRefreshingBalance ? "animate-spin" : ""}`} />
                   {isRefreshingBalance ? "Refreshing..." : "Refresh"}
                 </button>
-                <p className="mt-1 text-[11px] text-slate-400 sm:text-right">
+                <p className="mt-1 text-[11px] text-slate-400 sm:text-end">
                   Refreshing in {refreshCountdown}s
                 </p>
               </div>
             ) : accountNotFound && isTestnet ? (
-              <div className="sm:text-right">
+              <div className="sm:text-end">
                 <p className="text-amber-400 text-sm mb-2">Account not funded yet</p>
                 <p className="text-xs text-slate-400">
                   Use the funding card below to credit your wallet on testnet.
@@ -1379,6 +1504,68 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         />
       )}
     </div>
+  );
+}
+
+function DraggableWidget({
+  id,
+  dragHandleLabel,
+  isDragging,
+  isDragOver,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
+  children,
+}: {
+  id: string;
+  dragHandleLabel: string;
+  isDragging: boolean;
+  isDragOver: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      data-widget-id={id}
+      className={`relative group rounded-2xl transition-opacity ${isDragging ? "opacity-40" : ""} ${
+        isDragOver ? "ring-2 ring-stellar-400/60 ring-offset-2 ring-offset-cosmos-950 rounded-2xl" : ""
+      }`}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        title="Drag to reorder"
+        aria-label={`Drag to reorder ${dragHandleLabel}`}
+        className="absolute -top-2 right-2 z-10 flex items-center justify-center cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 border border-white/10 rounded-full p-1.5"
+      >
+        <GripIcon className="w-4 h-4 text-slate-300" />
+      </button>
+      {children}
+    </div>
+  );
+}
+
+function GripIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="9" cy="6" r="1.5" />
+      <circle cx="15" cy="6" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="18" r="1.5" />
+      <circle cx="15" cy="18" r="1.5" />
+    </svg>
   );
 }
 

@@ -20,7 +20,7 @@ Stellar MicroPay is an open-source project and every contribution matters, wheth
 
 ## 🧭 Code of Conduct
 
-Be kind, inclusive, and constructive. We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Harassment of any kind will not be tolerated.
+Be kind, inclusive, and constructive. We follow the [Contributor Covenant](CODE_OF_CONDUCT.md). Harassment of any kind will not be tolerated.
 
 ---
 

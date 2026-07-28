@@ -1,12 +1,8 @@
 "use strict";
 
 const crypto = require("crypto");
-const { Horizon } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
 const logger = require("../utils/logger");
-require("dotenv").config();
-
-const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
-const server = new Horizon.Server(HORIZON_URL);
 
 // In-memory store: { id, publicKey, url, secret, createdAt }
 const webhooks = new Map();
@@ -134,7 +130,7 @@ function registerMultiSigReminder(unsignedXDR, signers, threshold) {
   logger.info(JSON.stringify({ type: "multisig_reminder_registered", signersCount: signers.length, threshold }));
   
   // Start the reminder timer
-  scheduleReminder(unsignedXDR, reminder);
+  scheduleReminder(unsignedXDR);
   
   return reminder;
 }
@@ -142,7 +138,7 @@ function registerMultiSigReminder(unsignedXDR, signers, threshold) {
 /**
  * Schedule a reminder to be sent after the configurable delay
  */
-function scheduleReminder(unsignedXDR, reminder) {
+function scheduleReminder(unsignedXDR) {
   setTimeout(async () => {
     const current = multiSigReminders.get(unsignedXDR);
     if (!current || current.reminderSent) return;

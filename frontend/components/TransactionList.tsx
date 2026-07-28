@@ -5,7 +5,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
+import type { FixedSizeList, ListOnItemsRenderedProps } from "react-window";
 import { withErrorBoundary } from "@/components/ErrorBoundary";
+import VirtualizedList from "@/components/VirtualizedList";
 import {
   getPaymentHistory,
   shortenAddress,
@@ -24,6 +26,11 @@ import {
   PrinterIcon,
 } from "@/components/icons";
 import clsx from "clsx";
+
+// Rows render virtualized past this count so long payment histories stay cheap to render.
+const VIRTUALIZE_THRESHOLD = 100;
+const ROW_HEIGHT_PX = 76;
+const VIRTUAL_VIEWPORT_HEIGHT_PX = ROW_HEIGHT_PX * 6;
 
 export type TransactionDirectionFilter = "all" | "sent" | "received";
 
@@ -145,6 +152,10 @@ function TransactionList({
 
   const lastPagingTokenRef = useRef<string | undefined>(undefined);
   const [infiniteScroll, setInfiniteScroll] = useState(false);
+  const virtualListRef = useRef<FixedSizeList>(null);
+  const fetchingMoreRef = useRef(false);
+
+  const visiblePayments = filterPayments(payments, filters);
 
   // Sentinel ref for IntersectionObserver — defer initial fetch until visible
   const containerRef = useRef<HTMLDivElement>(null);
@@ -287,6 +298,28 @@ function TransactionList({
     upsertAddressBookContact({ nickname, address });
   };
 
+  // When virtualized, "Load more" / infinite scroll can't rely on a DOM
+  // sentinel below the list (react-window scrolls its own inner viewport),
+  // so trigger the next page once the rendered window nears the end instead.
+  const handleVirtualItemsRendered = useCallback(
+    ({ visibleStopIndex }: ListOnItemsRenderedProps) => {
+      if (!infiniteScroll || !hasMore || loading || fetchingMoreRef.current) return;
+      if (visibleStopIndex < visiblePayments.length - 5) return;
+
+      fetchingMoreRef.current = true;
+      fetchPayments(true).finally(() => {
+        fetchingMoreRef.current = false;
+      });
+    },
+    [infiniteScroll, hasMore, loading, fetchPayments, visiblePayments.length]
+  );
+
+  // Keep the focused row scrolled into view for keyboard navigation once virtualized.
+  useEffect(() => {
+    if (focusedIndex < 0) return;
+    virtualListRef.current?.scrollToItem(focusedIndex, "smart");
+  }, [focusedIndex]);
+
   // Prepend a newly streamed payment if it doesn't already exist
   useEffect(() => {
     if (!incomingPayment) return;
@@ -300,9 +333,133 @@ function TransactionList({
     });
   }, [incomingPayment, onPaymentsChange]);
 
-  const visiblePayments = filterPayments(payments, filters);
   const hasActiveFilters =
     filters.direction !== "all" || filters.minAmount.trim() !== "" || filters.memoSearch.trim() !== "";
+
+  const renderPaymentRow = (tx: PaymentRecord, index: number) => (
+    <div
+      role="listitem"
+      tabIndex={focusedIndex === index ? 0 : -1}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.min(prev + 1, visiblePayments.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.max(prev - 1, 0));
+        } else if (e.key === "Enter" && focusedIndex === index) {
+          e.preventDefault();
+          const address = tx.type === "sent" ? tx.to : tx.from;
+          copyToClipboard(address);
+          setCopiedId(tx.id);
+          setTimeout(() => setCopiedId(null), 2000);
+        }
+      }}
+      onBlur={() => setFocusedIndex(-1)}
+      onFocus={() => setFocusedIndex(index)}
+      className={clsx(
+        "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
+        focusedIndex === index && "outline-none ring-2 ring-stellar-500 ring-offset-2"
+      )}
+      aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${tx.type === "sent" ? tx.to : tx.from}`}
+    >
+      {/* Direction icon */}
+      <div
+        className={clsx(
+          "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
+          tx.type === "sent"
+            ? "bg-red-500/10 border border-red-500/20"
+            : "bg-emerald-500/10 border border-emerald-500/20"
+        )}
+      >
+        {tx.type === "sent" ? (
+          <ArrowUpIcon className="w-4 h-4 text-red-400" />
+        ) : (
+          <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
+        )}
+      </div>
+
+      {/* Details */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-200 capitalize">
+            {tx.type === "sent" ? "Sent to" : "Received from"}
+          </span>
+          <button
+            onClick={() =>
+              handleCopy(
+                tx.type === "sent" ? tx.to : tx.from,
+                tx.id
+              )
+            }
+            aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
+            className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
+          >
+            {copiedId === tx.id
+              ? "Copied!"
+              : shortenAddress(tx.type === "sent" ? tx.to : tx.from, 5)}
+          </button>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-slate-400">
+            {timeAgo(tx.createdAt)}
+          </span>
+          {tx.memo && (
+            <span className="text-xs text-slate-600 truncate max-w-32">
+              · &ldquo;{tx.memo}&rdquo;
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Amount + link */}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span
+          className={clsx(
+            "text-sm font-mono font-medium",
+            tx.type === "sent" ? "text-red-400" : "text-emerald-400"
+          )}
+        >
+          {tx.type === "sent" ? "-" : "+"}
+          {formatAsset(tx.amount, tx.asset)}
+        </span>
+
+        <button
+          onClick={() => handleSaveContact(tx.type === "sent" ? tx.to : tx.from)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+          title="Save this address to contacts"
+          aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
+        >
+          Save contact
+        </button>
+
+        {/* Send Again — only for sent transactions */}
+        {tx.type === "sent" && (
+          <button
+            onClick={() =>
+              router.push(`/dashboard?to=${encodeURIComponent(tx.to)}&amount=${encodeURIComponent(tx.amount)}`)
+            }
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+            title="Pre-fill send form with this transaction"
+            aria-label="Send again to this recipient"
+          >
+            Send again
+          </button>
+        )}
+
+        <a
+          href={explorerUrl(tx.transactionHash) ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
+          title="View on Stellar Expert"
+          aria-label="View transaction on Stellar Expert"
+        >
+          <ExternalLinkIcon className="w-3.5 h-3.5" />
+        </a>
+      </div>
+    </div>
+  );
 
   if (loading) {
     return (
@@ -435,136 +592,18 @@ function TransactionList({
             <span>Keyboard navigation: ↑ ↓ to navigate, Enter to copy address</span>
           </div>
           
-          <div
-            role="list"
-            aria-label="Payment history"
+          <VirtualizedList
+            items={visiblePayments}
+            itemKey={(tx) => tx.id}
+            renderItem={renderPaymentRow}
+            itemHeight={ROW_HEIGHT_PX}
+            height={VIRTUAL_VIEWPORT_HEIGHT_PX}
+            threshold={VIRTUALIZE_THRESHOLD}
+            ariaLabel="Payment history"
             className="space-y-2"
-          >
-        {visiblePayments.map((tx, index) => (
-          <div
-            key={tx.id}
-            role="listitem"
-            tabIndex={focusedIndex === index ? 0 : -1}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setFocusedIndex((prev) => Math.min(prev + 1, visiblePayments.length - 1));
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setFocusedIndex((prev) => Math.max(prev - 1, 0));
-              } else if (e.key === 'Enter' && focusedIndex === index) {
-                e.preventDefault();
-                const address = tx.type === "sent" ? tx.to : tx.from;
-                copyToClipboard(address);
-                setCopiedId(tx.id);
-                setTimeout(() => setCopiedId(null), 2000);
-              }
-            }}
-            onBlur={() => setFocusedIndex(-1)}
-            onFocus={() => setFocusedIndex(index)}
-            className={clsx(
-              "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
-              focusedIndex === index && "outline-none ring-2 ring-stellar-500 ring-offset-2"
-            )}
-            aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${tx.type === "sent" ? tx.to : tx.from}`}
-          >
-            {/* Direction icon */}
-            <div
-              className={clsx(
-                "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-                tx.type === "sent"
-                  ? "bg-red-500/10 border border-red-500/20"
-                  : "bg-emerald-500/10 border border-emerald-500/20"
-              )}
-            >
-              {tx.type === "sent" ? (
-                <ArrowUpIcon className="w-4 h-4 text-red-400" />
-              ) : (
-                <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
-              )}
-            </div>
-
-            {/* Details */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-200 capitalize">
-                  {tx.type === "sent" ? "Sent to" : "Received from"}
-                </span>
-                <button
-                  onClick={() =>
-                    handleCopy(
-                      tx.type === "sent" ? tx.to : tx.from,
-                      tx.id
-                    )
-                  }
-                  aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
-                  className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
-                >
-                  {copiedId === tx.id
-                    ? "Copied!"
-                    : shortenAddress(tx.type === "sent" ? tx.to : tx.from, 5)}
-                </button>
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-slate-400">
-                  {timeAgo(tx.createdAt)}
-                </span>
-                {tx.memo && (
-                  <span className="text-xs text-slate-600 truncate max-w-32">
-                    · &ldquo;{tx.memo}&rdquo;
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Amount + link */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span
-                className={clsx(
-                  "text-sm font-mono font-medium",
-                  tx.type === "sent" ? "text-red-400" : "text-emerald-400"
-                )}
-              >
-                {tx.type === "sent" ? "-" : "+"}
-                {formatAsset(tx.amount, tx.asset)}
-              </span>
-
-              <button
-                onClick={() => handleSaveContact(tx.type === "sent" ? tx.to : tx.from)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-                title="Save this address to contacts"
-                aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
-              >
-                Save contact
-              </button>
-
-              {/* Send Again — only for sent transactions */}
-              {tx.type === "sent" && (
-                <button
-                  onClick={() =>
-                    router.push(`/dashboard?to=${encodeURIComponent(tx.to)}&amount=${encodeURIComponent(tx.amount)}`)
-                  }
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-                  title="Pre-fill send form with this transaction"
-                  aria-label="Send again to this recipient"
-                >
-                  Send again
-                </button>
-              )}
-              
-              <a
-                href={explorerUrl(tx.transactionHash) ?? undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
-                title="View on Stellar Expert"
-                aria-label="View transaction on Stellar Expert"
-              >
-                <ExternalLinkIcon className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          </div>
-        ))}
+            listRef={virtualListRef}
+            onItemsRendered={handleVirtualItemsRendered}
+          />
 
         {/* Infinite Scroll Sentinel / Loading Indicator */}
         {infiniteScroll && (
@@ -597,7 +636,6 @@ function TransactionList({
             </button>
           </div>
         )}
-      </div>
     </div>
   );
 }

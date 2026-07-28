@@ -37,7 +37,8 @@ Stellar MicroPay is a three-tier Web3 application:
                                    │   (Rust/WASM)            │
                                    │                          │
                                    │  • Tip recording         │
-                                   │  • Escrow (v2.1)         │
+                                   │  • Payment streams       │
+                                   │  • Escrow (time-locked)  │
                                    └──────────────────────────┘
 ```
 
@@ -78,6 +79,19 @@ If the backend is down, users can still send payments via the frontend.
 
 ### Testnet first
 The default configuration targets Stellar Testnet. Switching to Mainnet requires only an environment variable change.
+
+### Contract storage is versioned, not implicitly migrated
+Soroban upgrades replace the WASM but keep the contract id and every storage
+entry, so old data is handed to the new build untouched. The contract records
+the layout its data was written for under `DataKey::SchemaVersion`
+(`get_schema_version()`), and the admin-gated `migrate()` advances it after an
+upgrade. Storage-shape changes therefore ship as an explicit, ordered
+procedure — publish WASM, rewrite affected entries, stamp the version —
+rather than as a silent reinterpretation of existing bytes.
+
+Full version table, the rules for what counts as a breaking storage change,
+and the step-by-step upgrade/rollback procedure live in
+[contracts/stellar-micropay-contract/README.md](../contracts/stellar-micropay-contract/README.md#upgrades-and-storage-migration-562).
 
 ## Security Considerations
 

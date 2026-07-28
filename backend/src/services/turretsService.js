@@ -9,25 +9,59 @@ const crypto = require("crypto");
 const {
   Account,
   Asset,
-  Horizon,
   Keypair,
   Networks,
   Operation,
   Transaction,
   TransactionBuilder,
 } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
+const logger = require("../utils/logger");
 
-const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
 const NETWORK_PASSPHRASE =
   process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
-const server = new Horizon.Server(HORIZON_URL);
-
 const deployments = new Map();
 const executionHistory = [];
+const auditLog = [];
 
 let runnerStarted = false;
 let runnerTimer = null;
+
+/**
+ * Add an audit log entry for Turrets actions.
+ * Tracks who performed what action and when for security auditing.
+ *
+ * @param {string} action - The action performed (e.g., "deploy", "pause", "resume")
+ * @param {string} actor - The Stellar public key of the actor
+ * @param {string} deploymentId - The deployment ID affected
+ * @param {object} details - Additional details about the action
+ */
+function addAuditLog(action, actor, deploymentId, details = {}) {
+  const entry = {
+    id: crypto.randomUUID(),
+    action,
+    actor,
+    deploymentId,
+    details,
+    timestamp: new Date().toISOString(),
+  };
+  auditLog.push(entry);
+
+  // Keep audit log size bounded (max 5000 entries)
+  if (auditLog.length > 5000) {
+    auditLog.splice(0, auditLog.length - 5000);
+  }
+
+  // Also log to structured logger for persistence
+  logger.info({
+    audit: true,
+    action,
+    actor,
+    deploymentId,
+    details,
+  }, `Turrets audit: ${action} by ${actor}`);
+}
 
 function validatePublicKey(publicKey) {
   if (!publicKey || !/^G[A-Z0-9]{55}$/.test(publicKey)) {
@@ -461,6 +495,13 @@ function deployTxFunction({ ownerPublicKey, type, config, deploymentHash, signed
   deployments.set(id, deployment);
   addExecutionLog(id, "created", "txFunction deployed");
 
+  // Audit log for deployment action
+  addAuditLog("deploy", ownerPublicKey, id, {
+    type,
+    config: normalizedConfig,
+    deploymentHash,
+  });
+
   startRunner();
 
   return deployment;
@@ -490,11 +531,53 @@ function getExecutionHistory(deploymentId) {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-function setDeploymentStatus(id, status) {
+function setDeploymentStatus(id, status, actor = null) {
   const deployment = getDeployment(id);
+  const previousStatus = deployment.status;
   deployment.status = status;
   addExecutionLog(id, "status", `txFunction ${status}`);
+
+  // Audit log for status change actions (pause/resume)
+  if (actor && (status === "paused" || status === "active")) {
+    addAuditLog(status, actor, id, {
+      previousStatus,
+      newStatus: status,
+    });
+  }
+
   return deployment;
+}
+
+/**
+ * Get audit log entries, optionally filtered by actor or deployment ID.
+ *
+ * @param {object} filters - Optional filters { actor, deploymentId, limit }
+ * @returns {Array} Filtered audit log entries
+ */
+function getAuditLog(filters = {}) {
+  let entries = [...auditLog];
+
+  if (filters.actor) {
+    entries = entries.filter((entry) => entry.actor === filters.actor);
+  }
+
+  if (filters.deploymentId) {
+    entries = entries.filter((entry) => entry.deploymentId === filters.deploymentId);
+  }
+
+  if (filters.action) {
+    entries = entries.filter((entry) => entry.action === filters.action);
+  }
+
+  // Sort by timestamp descending (newest first)
+  entries.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+
+  // Apply limit if specified
+  if (filters.limit && filters.limit > 0) {
+    entries = entries.slice(0, filters.limit);
+  }
+
+  return entries;
 }
 
 module.exports = {
@@ -504,6 +587,7 @@ module.exports = {
   getDeployment,
   getExecutionHistory,
   setDeploymentStatus,
+  getAuditLog,
   startRunner,
   stopRunner,
 };

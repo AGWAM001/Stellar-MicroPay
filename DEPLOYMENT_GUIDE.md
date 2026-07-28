@@ -80,17 +80,21 @@ soroban contract invoke \
 
 ### Opening a Stream
 
+The deposit must be at least `MIN_STREAM_DEPOSIT` (10_000 stroops) and must
+fund at least `MIN_STREAM_DURATION_LEDGERS` (60) ledgers at the given rate —
+1_000 stroops/ledger against a 1_000_000 deposit funds 1_000 ledgers.
+
 ```bash
 soroban contract invoke \
   --id <CONTRACT_ID> \
   --source <PAYER_SECRET_KEY> \
   --network $STELLAR_NETWORK \
-  open_stream \
-  --args \
-    "<PAYER_ADDRESS>" \
-    "<RECIPIENT_ADDRESS>" \
-    "1000" \
-    "1000000"
+  -- open_stream \
+  --token_address <XLM_SAC_ADDRESS> \
+  --payer <PAYER_ADDRESS> \
+  --recipient <RECIPIENT_ADDRESS> \
+  --rate_per_ledger 1000 \
+  --deposit 1000000
 ```
 
 ### Claiming from a Stream
@@ -100,10 +104,9 @@ soroban contract invoke \
   --id <CONTRACT_ID> \
   --source <RECIPIENT_SECRET_KEY> \
   --network $STELLAR_NETWORK \
-  claim_stream \
-  --args \
-    "1" \
-    "<RECIPIENT_ADDRESS>"
+  -- claim_stream \
+  --stream_id 1 \
+  --recipient <RECIPIENT_ADDRESS>
 ```
 
 ### Topping Up a Stream
@@ -113,11 +116,10 @@ soroban contract invoke \
   --id <CONTRACT_ID> \
   --source <PAYER_SECRET_KEY> \
   --network $STELLAR_NETWORK \
-  top_up_stream \
-  --args \
-    "1" \
-    "<PAYER_ADDRESS>" \
-    "500000"
+  -- top_up_stream \
+  --stream_id 1 \
+  --payer <PAYER_ADDRESS> \
+  --amount 500000
 ```
 
 ### Closing a Stream
@@ -127,10 +129,34 @@ soroban contract invoke \
   --id <CONTRACT_ID> \
   --source <PAYER_SECRET_KEY> \
   --network $STELLAR_NETWORK \
-  close_stream \
-  --args \
-    "1" \
-    "<PAYER_ADDRESS>"
+  -- close_stream \
+  --stream_id 1 \
+  --payer <PAYER_ADDRESS>
+```
+
+### Pausing and Resuming a Stream
+
+Ledgers between a pause and the matching resume do not accrue: the claimable
+amount stays flat while paused and picks up where it left off on resume.
+
+```bash
+# Pause accrual
+soroban contract invoke \
+  --id <CONTRACT_ID> \
+  --source <PAYER_SECRET_KEY> \
+  --network $STELLAR_NETWORK \
+  -- pause_stream \
+  --stream_id 1 \
+  --payer <PAYER_ADDRESS>
+
+# Resume accrual
+soroban contract invoke \
+  --id <CONTRACT_ID> \
+  --source <PAYER_SECRET_KEY> \
+  --network $STELLAR_NETWORK \
+  -- resume_stream \
+  --stream_id 1 \
+  --payer <PAYER_ADDRESS>
 ```
 
 ## Creating a Pull Request
