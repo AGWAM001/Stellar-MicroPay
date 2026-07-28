@@ -18,6 +18,7 @@ import {
 } from "@/lib/turrets";
 import { shortenAddress } from "@/lib/stellar";
 import { useTheme } from "@/contexts/ThemeContext";
+import { resetOnboardingTour } from "@/hooks/useOnboarding";
 
 interface SettingsPageProps {
   publicKey: string | null;
@@ -66,6 +67,14 @@ export default function SettingsPage({
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [usernameSuccess, setUsernameSuccess] = useState<string | null>(null);
   const [registeredUsername, setRegisteredUsername] = useState<string | null>(null);
+
+  // Onboarding tour replay (#621)
+  const [tourResetMessage, setTourResetMessage] = useState<string | null>(null);
+
+  const handleReplayTour = () => {
+    resetOnboardingTour();
+    setTourResetMessage("Tour reset — it will show again next time you open the dashboard.");
+  };
 
   // Fetch current username on mount
   useEffect(() => {
@@ -790,6 +799,30 @@ export default function SettingsPage({
                 </div>
               </div>
             )}
+
+            {/* Help & Onboarding — manually re-trigger the dashboard tour (#621) */}
+            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">
+                Help & Onboarding
+              </h2>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                Replay the guided tour that highlights your balance, the send form, and transaction history.
+              </p>
+              <button
+                onClick={handleReplayTour}
+                className="px-4 py-2 bg-stellar-500 hover:bg-stellar-600 text-white font-medium rounded-lg transition-colors"
+              >
+                Replay onboarding tour
+              </button>
+              {tourResetMessage && (
+                <p className="text-sm text-emerald-500 dark:text-emerald-400 mt-3">
+                  {tourResetMessage}{" "}
+                  <Link href="/dashboard" className="underline hover:no-underline">
+                    Go to dashboard →
+                  </Link>
+                </p>
+              )}
+            </div>
           </div>
         </main>
       </div>

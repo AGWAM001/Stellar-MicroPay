@@ -230,6 +230,10 @@ New contributors need a funded Stellar testnet account before they can sign and 
 - **Security**: Comprehensive input validation and access controls
 - **Compliance**: Follows Soroban best practices and standards
 
+## FAQ
+
+See [FAQ.md](FAQ.md) for answers to common questions about Stellar MicroPay.
+
 ## License
 
 This project is open source and available under the MIT License.
