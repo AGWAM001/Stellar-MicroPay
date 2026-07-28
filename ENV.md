@@ -48,3 +48,9 @@ The table below describes how variables in the frontend correspond to or cross-r
 | `NEXT_PUBLIC_HORIZON_URL` | `HORIZON_URL` | **Must align** to guarantee that both frontend operations and backend lookups query the same Horizon nodes. |
 | `NEXT_PUBLIC_API_URL` | `PORT` / Host | The frontend `NEXT_PUBLIC_API_URL` must point to the backend server URL (e.g., `http://localhost:4000` when backend `PORT` is `4000`). |
 | `NEXT_PUBLIC_SENTRY_DSN` | `SENTRY_DSN` | Should be linked to the same Sentry project or team workspace to centralize issue monitoring. |
+
+---
+
+## Key Rotation
+
+For procedures on rotating `JWT_SECRET` and `SERVER_PRIVATE_KEY` without breaking active sessions, see [docs/key-rotation.md](docs/key-rotation.md).

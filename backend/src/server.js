@@ -7,6 +7,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const pinoHttp = require("pino-http");
 const rateLimit = require("express-rate-limit");
@@ -122,11 +123,54 @@ const helmetOptions = {
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameSrc: ["'none'"],
+      // Disallow this API from being framed by any site (clickjacking defence,
+      // the CSP-level equivalent of X-Frame-Options: DENY).
+      frameAncestors: ["'none'"],
+      // Forbid <base> tag hijacking and form posts to third-party origins.
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
     },
   },
+  // HTTP Strict Transport Security — force HTTPS for two years, cover subdomains,
+  // and allow browser-preload-list inclusion. TLS is terminated at the
+  // load-balancer, so the header is emitted here for clients that reach us
+  // directly over HTTPS.
+  hsts: {
+    maxAge: 63072000, // 2 years
+    includeSubDomains: true,
+    preload: true,
+  },
+  // Send no referrer to other origins (avoids leaking API paths / tokens in
+  // Referer headers).
+  referrerPolicy: { policy: "no-referrer" },
+  // This JSON API should never be embedded cross-origin, nor share its window.
+  crossOriginResourcePolicy: { policy: "same-site" },
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  // Belt-and-braces clickjacking header for older clients that ignore CSP.
+  frameguard: { action: "deny" },
+  // Block Adobe cross-domain policy files.
+  permittedCrossDomainPolicies: { permittedPolicies: "none" },
 };
 
+// Remove the framework fingerprint header (helmet also does this, but disabling
+// at the Express level guarantees it even if helmet config changes).
+app.disable("x-powered-by");
+
 app.use(helmet(helmetOptions));
+// gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads
+// before they hit the wire. Must run before routes register their handlers so
+// res.write/res.end get wrapped for every response. SSE streams are excluded so
+// EventSource can receive incremental chunks without buffering delays.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path?.endsWith("/stream")) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+  })
+);
 // Structured JSON request logging (#269) — replaces morgan('dev'); reuses the
 // shared pino logger so HTTP logs are machine-parseable (Datadog/CloudWatch).
 app.use(pinoHttp({ logger }));
@@ -222,7 +266,7 @@ app.get("/api/docs.json", (req, res) => {
 
 // ─── 404 Handler ───────────────────────────────────────────────────────────────
 
-app.use((req, res, next) => {
+app.use((req, res) => {
   const sanitizedPath = req.path.replace(/[\r\n]/g, "");
   logger.warn({ method: req.method, path: sanitizedPath }, "Route not found");
   res.status(404).json({ error: "Route not found" });

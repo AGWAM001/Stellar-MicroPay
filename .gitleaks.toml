@@ -1,0 +1,32 @@
+# Gitleaks configuration for Stellar MicroPay.
+# Extends the bundled default ruleset and adds project-specific detections.
+
+[extend]
+# Inherit Gitleaks' built-in rules (AWS keys, generic API tokens, private keys, …)
+useDefault = true
+
+[[rules]]
+id = "stellar-secret-seed"
+description = "Stellar secret seed (S... 56-char base32)"
+# Stellar secret keys: 'S' followed by 55 base32 chars [A-Z2-7].
+regex = '''S[A-Z2-7]{55}'''
+keywords = ["S"]
+tags = ["stellar", "private-key"]
+
+[allowlist]
+description = "Files and paths that legitimately contain example/test values"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)ENV\.md$''',
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)Cargo\.lock$''',
+  '''(^|/)__tests__/''',
+  '''\.test\.js$''',
+]
+# Well-known Stellar test/documentation account addresses (public G-keys) and
+# common placeholder secrets should not trip the scanner.
+regexes = [
+  '''EXAMPLE''',
+  '''your[-_]?secret''',
+  '''changeme''',
+]

@@ -4,6 +4,8 @@
 
 **Interactive docs:** [Swagger UI](http://localhost:4000/api/docs) · [OpenAPI JSON](http://localhost:4000/api/docs.json)
 
+**Client examples:** [TypeScript & Python](./sdk-examples.md)
+
 ---
 
 ## Response conventions
@@ -25,7 +27,15 @@ Most JSON endpoints use one of these shapes:
 { "error": "Human-readable message" }
 ```
 
-Some endpoints (health, federation, auth challenge, webhooks list) return a flat object without the `success` / `data` wrapper. Each route below shows the actual response shape.
+**Error response rule:** All error responses (4xx and 5xx) use the `{ "error": "..." }` shape consistently. The `success` field is omitted from error responses — clients should check the HTTP status code instead.
+
+Some endpoints return a flat success object without the `success` / `data` wrapper. These are intentional exceptions documented below:
+
+| Endpoint | Reason |
+|----------|--------|
+| `GET /health`, `GET /api/health` | Health checks return minimal flat JSON for liveness probes |
+| `GET /federation` | SEP-0002 federation responses follow the Stellar protocol spec |
+| `GET /api/auth` | SEP-0010 challenge returns raw XDR for client-side signing |
 
 **Authentication:** Account detail routes require a JWT from [SEP-0010 auth](#authentication). Send:
 
@@ -40,14 +50,17 @@ Authorization: Bearer <token>
 | Limiter | Window | Limit | Applies to |
 |---------|--------|-------|------------|
 | Global | 15 minutes | 100 req/IP | All routes **except** `/health` and `/api/health` |
-| Strict | 1 minute | 20 req/IP | `/api/accounts/*`, `/api/payments/*`, `/api/analytics/*`, `/api/tips/*`, `/api/turrets/*`, `/federation` |
+| Payment | 1 minute | 10 req/IP | `/api/payments/*`, `/api/turrets/*` |
+| Read-only | 1 minute | 20 req/IP | `/api/accounts/register`, `/federation`, `/api/analytics/*`, `/api/tips/*` |
 
 Responses include `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers.
 
 | Status | Body |
 |--------|------|
 | 429 (global) | `{ "error": "Too many requests, please try again later." }` |
-| 429 (strict) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 (sensitive) | `{ "error": "Too many requests to this endpoint, please wait 1 minute." }` |
+| 429 (read-only) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 (payment) | `{ "error": "Too many requests to payment/turret routes, please wait 1 minute." }` |
 
 ---
 
@@ -189,7 +202,7 @@ FEDERATION_SERVER="http://localhost:4000/federation"
 
 ### `GET /federation`
 
-SEP-0002 federation resolver. Subject to **strict** rate limit.
+SEP-0002 federation resolver. Subject to **read-only** rate limit.
 
 **Query parameters**
 
@@ -231,7 +244,7 @@ SEP-0002 federation resolver. Subject to **strict** rate limit.
 
 ### `GET /api/accounts/resolve/:username`
 
-Resolve a registered username to a public key. Subject to **strict** rate limit.
+Resolve a registered username to a public key. Subject to **sensitive** rate limit.
 
 **Path parameters**
 
@@ -262,7 +275,7 @@ Resolve a registered username to a public key. Subject to **strict** rate limit.
 
 ### `POST /api/accounts/register`
 
-Register a username for a Stellar public key. Subject to **strict** rate limit.
+Register a username for a Stellar public key. Subject to **read-only** rate limit.
 
 **Request body (JSON)**
 
@@ -304,7 +317,7 @@ Register a username for a Stellar public key. Subject to **strict** rate limit.
 
 ### `GET /api/accounts/:publicKey`
 
-Fetch account info and balances from Horizon. Requires JWT; caller may only access their own key. Subject to **strict** rate limit.
+Fetch account info and balances from Horizon. Requires JWT; caller may only access their own key. Subject to **sensitive** rate limit.
 
 **Path parameters**
 
@@ -351,7 +364,7 @@ Fetch account info and balances from Horizon. Requires JWT; caller may only acce
 
 ### `GET /api/accounts/:publicKey/balance`
 
-Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accounts/:publicKey`.
+Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accounts/:publicKey`. Subject to **sensitive** rate limit.
 
 **Response `200`**
 ```json
@@ -372,7 +385,7 @@ Fetch native XLM balance only. Same auth and rate-limit rules as `GET /api/accou
 
 ### `GET /api/payments/:publicKey`
 
-Payment history from Horizon. Subject to **strict** rate limit.
+Payment history from Horizon. Subject to **payment** rate limit.
 
 **Path parameters**
 
@@ -451,7 +464,7 @@ Aggregate payment statistics (computed from up to 100 recent payments).
 
 ## Analytics
 
-All analytics routes use a 5-minute in-memory cache per public key. Subject to **strict** rate limit.
+All analytics routes use a 5-minute in-memory cache per public key. Subject to **read-only** rate limit.
 
 ### `GET /api/analytics/:publicKey/summary`
 
@@ -519,6 +532,83 @@ Payment counts grouped by day of week (UTC).
 }
 ```
 
+### `GET /api/analytics/:publicKey/cohorts`
+
+Retention-style cohort breakdown showing one-time vs repeat counterparties over time.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| period | string | `month` | Cohort bucket size. Use `week` for weekly buckets. |
+| periods | integer | `6` | Number of buckets to return, capped at 12. |
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "data": {
+    "publicKey": "GABC1234567890123456789012345678901234567890123456789012345",
+    "period": "month",
+    "periods": 6,
+    "range": {
+      "start": "2026-02-01T00:00:00.000Z",
+      "end": "2026-07-31T23:59:59.999Z"
+    },
+    "cohorts": [
+      {
+        "periodStart": "2026-07-01T00:00:00.000Z",
+        "periodEnd": "2026-07-31T23:59:59.999Z",
+        "label": "Jul 2026",
+        "period": "month",
+        "sent": {
+          "paymentCount": 4,
+          "totalXLM": "42.0000000",
+          "counterparties": {
+            "oneTimeCounterparties": 2,
+            "repeatCounterparties": 1,
+            "totalCounterparties": 3
+          }
+        },
+        "received": {
+          "paymentCount": 3,
+          "totalXLM": "18.0000000",
+          "counterparties": {
+            "oneTimeCounterparties": 1,
+            "repeatCounterparties": 1,
+            "totalCounterparties": 2
+          }
+        },
+        "totalCounterparties": 5,
+        "repeatRate": 40
+      }
+    ]
+  }
+}
+```
+
+### `GET /api/analytics/:publicKey/stream`
+
+Server-sent events feed for new payment operations. The dashboard uses this
+stream first and falls back to polling if the connection drops.
+
+**Response `200`** `Content-Type: text/event-stream`
+
+Each event payload is a normalized payment record:
+```json
+{
+  "id": "operation-id",
+  "type": "received",
+  "amount": "10.0000000",
+  "asset": "XLM",
+  "from": "GABC...SENDER",
+  "to": "GXYZ...RECIPIENT",
+  "createdAt": "2025-01-01T12:00:00.000Z",
+  "transactionHash": "abc123...",
+  "pagingToken": "..."
+}
+```
+
 **Errors (all analytics routes)**
 
 | Status | Body |
@@ -529,7 +619,7 @@ Payment counts grouped by day of week (UTC).
 
 ## Tips
 
-In-memory tip ledger (v1). Subject to **strict** rate limit.
+In-memory tip ledger (v1). Subject to **read-only** rate limit.
 
 ### `POST /api/tips`
 
@@ -688,7 +778,7 @@ Tips sent by a user.
 
 ## Turrets (txFunctions)
 
-Automated transaction functions (DCA, stop-loss, escrow release). Subject to **strict** rate limit (20 req/min).
+Automated transaction functions (DCA, stop-loss, escrow release). Subject to **payment** rate limit (10 req/min).
 
 Supported `type` values: `dca`, `stop_loss`, `escrow_release`.
 
@@ -701,6 +791,11 @@ List deployments.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | ownerPublicKey | string | no | Filter by owner `G...` key |
+
+**Example request**
+```
+GET /api/turrets?ownerPublicKey=GABC1234567890123456789012345678901234567890123456789012345
+```
 
 **Response `200`**
 ```json
@@ -801,6 +896,22 @@ Deploy a txFunction after signing the challenge.
 | deploymentHash | string | yes | Hash from challenge response |
 | signedChallengeXDR | string | yes | Challenge XDR signed by owner |
 
+**Example request**
+```json
+{
+  "ownerPublicKey": "GABC1234567890123456789012345678901234567890123456789012345",
+  "type": "dca",
+  "config": {
+    "intervalMinutes": 60,
+    "amountQuote": 10,
+    "quoteAssetCode": "USDC",
+    "quoteAssetIssuer": "GBBD47IF6LOC7NNYVK5WQCCFNNBX2L5TBRW2NTRU3OBMKENZ5YKF3NPS"
+  },
+  "deploymentHash": "a1b2c3d4e5f6...",
+  "signedChallengeXDR": "AAAAAgAAAAC..."
+}
+```
+
 **Response `201`**
 ```json
 {
@@ -838,6 +949,11 @@ Get a single deployment.
 |------|------|-------------|
 | id | string (UUID) | Deployment ID |
 
+**Example request**
+```
+GET /api/turrets/550e8400-e29b-41d4-a716-446655440000
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment } }`
 
 **Errors**
@@ -851,6 +967,11 @@ Get a single deployment.
 ### `GET /api/turrets/:id/history`
 
 Execution log for a deployment (newest first).
+
+**Example request**
+```
+GET /api/turrets/550e8400-e29b-41d4-a716-446655440000/history
+```
 
 **Response `200`**
 ```json
@@ -881,7 +1002,24 @@ Execution log for a deployment (newest first).
 
 Pause a deployment.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| id | string (UUID) | Deployment ID |
+
+**Example request**
+```
+POST /api/turrets/550e8400-e29b-41d4-a716-446655440000/pause
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment, "status": "paused" } }`
+
+**Errors**
+
+| Status | Body |
+|--------|------|
+| 404 | `{ "error": "txFunction not found" }` |
 
 ---
 
@@ -889,7 +1027,24 @@ Pause a deployment.
 
 Resume a paused deployment.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| id | string (UUID) | Deployment ID |
+
+**Example request**
+```
+POST /api/turrets/550e8400-e29b-41d4-a716-446655440000/resume
+```
+
 **Response `200`** — `{ "success": true, "data": { ...deployment, "status": "active" } }`
+
+**Errors**
+
+| Status | Body |
+|--------|------|
+| 404 | `{ "error": "txFunction not found" }` |
 
 ---
 
@@ -920,7 +1075,7 @@ Register Horizon SSE listeners that POST to your URL when payments are received.
 ```json
 {
   "success": true,
-  "webhook": {
+  "data": {
     "id": "1",
     "publicKey": "GABC...",
     "url": "https://example.com/webhooks/stellar",
@@ -961,10 +1116,22 @@ Header: `X-Webhook-Signature` — HMAC-SHA256 hex of the JSON body using `secret
 
 List webhooks for an account.
 
+**Path parameters**
+
+| Name | Type | Description |
+|------|------|-------------|
+| publicKey | string | Stellar `G...` public key |
+
+**Example request**
+```
+GET /api/webhooks/GABC1234567890123456789012345678901234567890123456789012345
+```
+
 **Response `200`**
 ```json
 {
-  "webhooks": [
+  "success": true,
+  "data": [
     {
       "id": "1",
       "publicKey": "GABC...",
@@ -988,11 +1155,15 @@ Delete a webhook by numeric ID.
 |------|------|-------------|
 | id | string | Webhook ID assigned at registration |
 
+**Example request**
+```
+DELETE /api/webhooks/1
+```
+
 **Response `200`**
 ```json
 {
-  "success": true,
-  "message": "Webhook 1 deleted"
+  "success": true
 }
 ```
 
@@ -1013,7 +1184,9 @@ These apply across routes unless noted otherwise.
 | 400 | Invalid JSON body | `{ "error": "Invalid JSON body" }` |
 | 404 | Unknown route | `{ "error": "Route not found" }` |
 | 429 | Rate limit (global) | `{ "error": "Too many requests, please try again later." }` |
-| 429 | Rate limit (strict) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 | Rate limit (sensitive) | `{ "error": "Too many requests to this endpoint, please wait 1 minute." }` |
+| 429 | Rate limit (read-only) | `{ "error": "Too many requests to sensitive routes, please wait 1 minute." }` |
+| 429 | Rate limit (payment) | `{ "error": "Too many requests to payment/turret routes, please wait 1 minute." }` |
 | 500 | Unhandled server error | `{ "error": "Internal Server Error" }` or `{ "error": "<message>" }` |
 
 **CORS:** Requests from origins not listed in `ALLOWED_ORIGINS` are rejected by the CORS middleware.

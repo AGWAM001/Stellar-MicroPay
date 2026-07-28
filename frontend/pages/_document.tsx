@@ -9,25 +9,8 @@ export default function Document() {
   return (
     <Html lang="en">
       <Head>
-        {/* Prevent theme flash on page load (#217) */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function() {
-                try {
-                  const saved = localStorage.getItem('stellar-micropay:theme');
-                  const preferred = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-                  const theme = saved || preferred;
-                  if (theme === 'dark') {
-                    document.documentElement.classList.add('dark');
-                  } else {
-                    document.documentElement.classList.remove('dark');
-                  }
-                } catch (e) {}
-              })()
-            `,
-          }}
-        />
+        {/* Prevent theme flash on page load (#217) without requiring inline script CSP allowances. */}
+        <script src="/theme-init.js" />
 
         {/* PWA Manifest */}
         <link rel="manifest" href="/manifest.json" />

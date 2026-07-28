@@ -9,6 +9,8 @@ export interface RecurringSchedule {
   startDate: string; // ISO date string YYYY-MM-DD
   nextDueDate: string; // ISO date string YYYY-MM-DD
   createdAt: number;
+  paused?: boolean; // New: pause state
+  pausedAt?: number; // New: timestamp when paused
 }
 
 const STORAGE_KEY = "stellar-micropay:recurring-schedules";
@@ -64,6 +66,8 @@ function generateId(): string {
 }
 
 function isDue(schedule: RecurringSchedule): boolean {
+  // Paused schedules are never due
+  if (schedule.paused) return false;
   return schedule.nextDueDate <= todayISO();
 }
 
@@ -173,11 +177,32 @@ export default function RecurringPayments({ onPayNow }: RecurringPaymentsProps) 
     setShowForm(true);
   };
 
+  const handlePause = (id: string) => {
+    const updated = schedules.map((s) =>
+      s.id === id
+        ? { ...s, paused: true, pausedAt: Date.now() }
+        : s
+    );
+    persist(updated);
+  };
+
+  const handleResume = (id: string) => {
+    const updated = schedules.map((s) =>
+      s.id === id
+        ? { ...s, paused: false, pausedAt: undefined }
+        : s
+    );
+    persist(updated);
+  };
+
   const handleDelete = (id: string) => {
     persist(schedules.filter((s) => s.id !== id));
   };
 
   const handlePayNow = (s: RecurringSchedule) => {
+    // Don't allow payment for paused schedules
+    if (s.paused) return;
+    
     // Advance the next due date after triggering pay
     const updated = schedules.map((sc) =>
       sc.id === s.id
@@ -331,6 +356,9 @@ export default function RecurringPayments({ onPayNow }: RecurringPaymentsProps) 
                 <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                   <span className="font-semibold text-sm text-white">{s.amount} XLM</span>
                   <span className="text-xs text-slate-400 capitalize">{s.frequency}</span>
+                  {s.paused && (
+                    <span className="text-xs text-amber-400 font-medium">· Paused</span>
+                  )}
                   {s.memo && (
                     <span className="text-xs text-slate-500 truncate max-w-[120px]">· {s.memo}</span>
                   )}
@@ -343,6 +371,25 @@ export default function RecurringPayments({ onPayNow }: RecurringPaymentsProps) 
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
+                {s.paused ? (
+                  <button
+                    onClick={() => handleResume(s.id)}
+                    className="text-xs text-green-400 hover:text-green-300 transition-colors cursor-pointer"
+                    aria-label="Resume schedule"
+                    title="Resume schedule"
+                  >
+                    <PlayIcon className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handlePause(s.id)}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                    aria-label="Pause schedule"
+                    title="Pause schedule"
+                  >
+                    <PauseIcon className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   onClick={() => handleEdit(s)}
                   className="text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
@@ -409,6 +456,38 @@ function TrashIcon({ className }: { className?: string }) {
         strokeLinejoin="round"
         strokeWidth={2}
         d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+      />
+    </svg>
+  );
+}
+
+function PauseIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
+    </svg>
+  );
+}
+
+function PlayIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
       />
     </svg>
   );

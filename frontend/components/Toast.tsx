@@ -38,8 +38,6 @@ export default function Toast({
   return (
     <div
       role="status"
-      aria-live="polite"
-      aria-atomic="true"
       className={clsx(
         "flex items-start gap-3 px-4 py-3 rounded-xl text-sm font-medium text-white",
         "border shadow-xl transition-all duration-300",
@@ -101,9 +99,14 @@ export function ToastContainer() {
   const { toasts } = useToastContext();
   if (toasts.length === 0) return null;
 
+  // Use 'assertive' if any error toasts are present, otherwise 'polite'
+  const hasError = toasts.some((t) => t.type === "error");
+  const liveRegion = hasError ? "assertive" : "polite";
+
   return (
     <div
-      aria-live="polite"
+      aria-live={liveRegion}
+      aria-atomic="true"
       aria-label="Notifications"
       className="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)] pointer-events-none"
     >

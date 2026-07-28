@@ -21,6 +21,7 @@ export const DEFAULT_CONFIGS: Record<"testnet" | "mainnet", NetworkConfig> = {
   },
 };
 
+/** Read the active network config from local storage (or env vars during SSR), falling back to testnet defaults. */
 export function getNetworkConfig(): NetworkConfig {
   if (typeof window === "undefined") {
     // Server-side: use env vars as fallback
@@ -41,6 +42,7 @@ export function getNetworkConfig(): NetworkConfig {
   return DEFAULT_CONFIGS.testnet;
 }
 
+/** Persist the given network config to local storage so it's used on subsequent loads. */
 export function setNetworkConfig(config: NetworkConfig): void {
   if (typeof window !== "undefined") {
     localStorage.setItem("stellar-micropay:network", JSON.stringify(config));
@@ -65,6 +67,7 @@ export const NETWORK_PASSPHRASE = getNetworkPassphrase();
 
 /** Pre-configured Horizon server instance for the active network. */
 let _server: Horizon.Server | null = null;
+/** Returns a cached Horizon server instance, recreating it if the network URL has changed. */
 export function getServer(): Horizon.Server {
   const currentConfig = getNetworkConfig();
   if (!_server || _server.serverURL.toString() !== currentConfig.horizonUrl) {
