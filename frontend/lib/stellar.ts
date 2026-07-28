@@ -40,6 +40,8 @@ import {
   NETWORK_PASSPHRASE,
 } from "./stellarConfig";
 
+import { apiFetch } from "./api";
+
 export {
   server,
   getServer,
@@ -89,6 +91,7 @@ export const STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM =
 const STELLAR_BASE_FEE_STROOPS_STRING = String(STELLAR_BASE_FEE_STROOPS);
 const ELEVATED_FEE_MAX_STROOPS = STELLAR_BASE_FEE_STROOPS * 10;
 
+/** Truncate a memo string so its UTF-8 encoding fits within the Stellar MEMO_TEXT byte limit. */
 export function truncateMemoText(memo: string): string {
   const encoder = new TextEncoder();
   if (encoder.encode(memo).length <= STELLAR_MEMO_TEXT_MAX_BYTES) {
@@ -158,6 +161,7 @@ export const SOROBAN_RPC_URL = getSorobanRpcUrl();
 
 /** Pre-configured Soroban RPC server instance. */
 let _sorobanServer: rpc.Server | null = null;
+/** Returns a cached Soroban RPC server instance, recreating it if the network URL has changed. */
 export function getSorobanServer(): rpc.Server {
   const currentUrl = getSorobanRpcUrl();
   if (!_sorobanServer || _sorobanServer.serverURL.toString() !== currentUrl) {
@@ -908,15 +912,15 @@ export async function getPaymentHistory(
         category: TransactionCategory.Payment,
       };
     } else if (op.type === "account_merge") {
-      const merge = op as any; // Cast to any to access Horizon properties that might be missing in type definitions
+      const merge = op as Horizon.HorizonApi.AccountMergeOperationResponse;
 
       record = {
         id: merge.id,
         type: "merge",
-        amount: "0", // Account merge doesn't have an amount
+        amount: "0",
         asset: "XLM",
-        from: merge.account || merge.source_account, // Handle potential variations in property names
-        to: merge.into, // The destination account
+        from: merge.source_account,
+        to: merge.into,
         createdAt: merge.created_at,
         transactionHash: merge.transaction_hash,
         pagingToken: merge.paging_token,
@@ -1283,6 +1287,7 @@ export async function getReceiptCount(payer: string): Promise<number> {
   }
 }
 
+/** Fetch the most recent payments for an account in chronological order, for sparkline charts. */
 export async function getRecentPaymentsForSparkline(
   publicKey: string,
   limit = 10
@@ -1331,7 +1336,7 @@ export function streamPayments(
     .cursor("now");
 
   const close = paymentsBuilder.stream({
-    onmessage: async (op: any) => {
+    onmessage: async (op) => {
       if (op.type !== "payment") return;
 
       const payment = op as Horizon.HorizonApi.PaymentOperationResponse;
@@ -1419,20 +1424,11 @@ export async function resolveFederationAddress(
     return resolveViaSdk();
   }
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
-  const federationUrl = `${apiBase}/federation?q=${encodeURIComponent(
-    normalizedAddress
-  )}&type=name`;
-
   try {
-    const response = await fetch(federationUrl);
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(
-        payload?.error || `Federation lookup failed with status ${response.status}`
-      );
-    }
+    const payload = await apiFetch<{ stellar_address: string; account_id: string }>(
+      `/federation?q=${encodeURIComponent(normalizedAddress)}&type=name`,
+      { raw: true },
+    );
 
     if (!isValidStellarAddress(payload?.account_id || "")) {
       throw new Error("Federation lookup did not return a valid account ID");
@@ -1541,7 +1537,7 @@ export interface Orderbook {
  */
 export interface TradeAggregation {
   timestamp: number;
-  trade_count: number;
+  trade_count: number | string;
   base_volume: string;
   counter_volume: string;
   avg: string;
@@ -1558,8 +1554,8 @@ export interface TradeAggregation {
 export interface OpenOffer {
   id: string | number;
   seller: string;
-  selling: Asset;
-  buying: Asset;
+  selling: { asset_type: string; asset_code?: string; asset_issuer?: string };
+  buying: { asset_type: string; asset_code?: string; asset_issuer?: string };
   amount: string;
   price: string;
 }
@@ -1604,8 +1600,8 @@ export async function fetchTradeAggregations(
     .order("desc")
     .call();
 
-  return records.records.map((r: any) => ({
-    timestamp: parseInt(r.timestamp),
+  return records.records.map((r) => ({
+    timestamp: parseInt(String(r.timestamp)),
     trade_count: r.trade_count,
     base_volume: r.base_volume,
     counter_volume: r.counter_volume,
@@ -1623,7 +1619,7 @@ export async function fetchTradeAggregations(
  */
 export async function fetchOpenOffers(publicKey: string): Promise<OpenOffer[]> {
   const result = await server.offers().forAccount(publicKey).call();
-  return result.records.map((r: any) => ({
+  return result.records.map((r) => ({
     id: r.id,
     seller: r.seller,
     selling: r.selling,
@@ -1797,50 +1793,137 @@ export async function fetchNetworkStats(): Promise<NetworkStats> {
 
 // ── Stellar Name Service ──────────────────────────────────────────────────
 
-const snsCache = new Map<string, { address: string; expiresAt: number }>()
-const SNS_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+/**
+ * Cached resolution entry for a Stellar name.
+ *
+ * @property name     - The original name string as entered by the user.
+ * @property address  - The resolved Stellar public key (G...).
+ * @property resolvedAt - Unix epoch milliseconds when the resolution occurred (used for TTL).
+ */
+export interface ResolvedName {
+  name: string;
+  address: string;
+  resolvedAt: number;
+}
+
+const snsCache = new Map<string, ResolvedName>();
+const SNS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
- * Resolves a Stellar name (e.g. alice.xlm) to a Stellar address.
- * Uses Stellar Federation protocol under the hood.
- * Caches results for 10 minutes.
+ * Clear the in-memory SNS resolution cache.
+ *
+ * Primarily useful in tests to avoid cross-test pollution when mocking timers
+ * or resolution results.
+ */
+export function clearNameCache(): void {
+  snsCache.clear();
+}
+
+/**
+ * Resolve a human-readable Stellar name to a public key.
+ *
+ * Supports two input formats:
+ * - **Federation addresses** — the native `name*domain.com` SEP-0002 format
+ *   supported by any wallet that publishes a `stellar.toml`.  Passed directly
+ *   to `Federation.Server.resolve`.
+ * - **`.xlm` shorthand** — a convenience alias (e.g. `alice.xlm`) that is
+ *   translated to `alice*stellarnames.org` before resolution.  StellarNames
+ *   (stellarnames.org) is a community-run federation server for the `.xlm`
+ *   namespace.  This mapping is documented here so it is easy to swap for
+ *   another provider if needed.
+ *
+ * Raw `G...` public keys bypass resolution entirely and are returned as-is,
+ * so callers can pass any user input without pre-checking the format.
+ *
+ * Results are cached for {@link SNS_CACHE_TTL_MS} (10 minutes) to avoid
+ * redundant network lookups on every keystroke.  Use {@link clearNameCache}
+ * to invalidate the cache in tests.
+ *
+ * @param name - A `.xlm` name, `name*domain.com` federation address, or raw
+ *               Stellar public key.
+ * @returns A promise resolving to the Stellar public key (G...).
+ * @throws {Error} If the name cannot be resolved to a valid public key.
+ *
+ * @example
+ * ```ts
+ * const address = await resolveStellarName("alice.xlm");
+ * // → "GABC...XYZ"
+ *
+ * const same = await resolveStellarName("alice*stellarnames.org");
+ * // → "GABC...XYZ"
+ *
+ * // Raw addresses bypass resolution
+ * const raw = await resolveStellarName("GABC...XYZ");
+ * // → "GABC...XYZ"
+ * ```
  */
 export async function resolveStellarName(name: string): Promise<string> {
-  const trimmed = name.trim()
-  
-  // Return as-is if already a valid Stellar address
-  if (isValidStellarAddress(trimmed)) return trimmed
-  
-  // Check cache
-  const cached = snsCache.get(trimmed)
-  if (cached && cached.expiresAt > Date.now()) return cached.address
+  const trimmed = name.trim();
 
-  // Must contain a * for federation (e.g. alice*stellar.org) or end in .xlm
-  let federationAddress = trimmed
-  if (trimmed.endsWith('.xlm')) {
-    // Convert alice.xlm -> alice*stellarnames.org
-    const parts = trimmed.split('.')
-    federationAddress = `${parts[0]}*stellarnames.org`
-  } else if (!trimmed.includes('*')) {
-    throw new Error(`Invalid Stellar name: ${trimmed}`)
+  // Raw Stellar public keys bypass resolution entirely
+  if (isValidStellarAddress(trimmed)) return trimmed;
+
+  const key = trimmed.toLowerCase();
+
+  // Cache hit within TTL
+  const cached = snsCache.get(key);
+  if (cached && Date.now() - cached.resolvedAt < SNS_CACHE_TTL_MS) {
+    return cached.address;
+  }
+
+  // Determine the federation address to look up
+  let federationAddress = trimmed;
+  if (trimmed.toLowerCase().endsWith(".xlm")) {
+    // alice.xlm → alice*stellarnames.org
+    // StellarNames (https://stellarnames.org) is a community federation server
+    // for the .xlm namespace.  Update this mapping to switch providers.
+    const localPart = trimmed.slice(0, trimmed.lastIndexOf("."));
+    federationAddress = `${localPart}*stellarnames.org`;
+  } else if (!trimmed.includes("*")) {
+    throw new Error(`Could not resolve "${trimmed}" to a Stellar address`);
   }
 
   try {
-    const record = await Federation.Server.resolve(federationAddress)
-    if (!record.account_id) throw new Error('Name resolved but no address found')
-    snsCache.set(trimmed, { address: record.account_id, expiresAt: Date.now() + SNS_CACHE_TTL_MS })
-    return record.account_id
-  } catch (err: any) {
-    throw new Error(`Could not resolve "${trimmed}": ${err.message ?? 'Unknown error'}`)
+    const record = await Federation.Server.resolve(federationAddress);
+    if (!record.account_id) {
+      throw new Error("Name resolved but no address found");
+    }
+    snsCache.set(key, {
+      name: key,
+      address: record.account_id,
+      resolvedAt: Date.now(),
+    });
+    return record.account_id;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new Error(`Could not resolve "${trimmed}" to a Stellar address`);
   }
 }
 
 /**
- * Returns true if the input looks like a Stellar name (not a raw address)
+ * Returns `true` when the input looks like a Stellar name rather than a raw
+ * public key.
+ *
+ * Detects:
+ * - `.xlm` suffix shorthand (e.g. `alice.xlm`)
+ * - Native federation format (e.g. `alice*domain.com`)
+ *
+ * Raw `G...` public keys and plain usernames (no `*` or `.xlm`) return `false`.
+ *
+ * @param value - User-supplied destination string.
+ * @returns `true` if the value should be resolved via {@link resolveStellarName}.
+ *
+ * @example
+ * ```ts
+ * isStellarName("alice.xlm")          // true
+ * isStellarName("alice*domain.com")   // true
+ * isStellarName("GABC...XYZ")         // false
+ * isStellarName("@username")          // false
+ * ```
  */
 export function isStellarName(value: string): boolean {
-  const v = value.trim()
-  return v.endsWith('.xlm') || v.includes('*')
+  const v = value.trim();
+  return v.toLowerCase().endsWith(".xlm") || v.includes("*");
 }
 
 // ─── Escrow (issue #213) ──────────────────────────────────────────────────────
@@ -1860,6 +1943,7 @@ export interface EscrowRecord {
   status: "Pending" | "Released" | "Cancelled";
 }
 
+/** Build and preflight a Soroban transaction that creates a new escrow locking funds for a recipient until a release ledger. */
 export async function buildCreateEscrowTransaction({
   fromPublicKey,
   toPublicKey,
@@ -1923,14 +2007,17 @@ async function buildEscrowMutation(
   return sorobanServer.prepareTransaction(tx);
 }
 
+/** Build and preflight a Soroban transaction that claims a released escrow by id. */
 export function buildClaimEscrowTransaction(fromPublicKey: string, id: number) {
   return buildEscrowMutation(fromPublicKey, "claim_escrow", id);
 }
 
+/** Build and preflight a Soroban transaction that cancels a pending escrow by id. */
 export function buildCancelEscrowTransaction(fromPublicKey: string, id: number) {
   return buildEscrowMutation(fromPublicKey, "cancel_escrow", id);
 }
 
+/** Fetch an escrow record by id from the contract, returning null if it does not exist or the query fails. */
 export async function getEscrow(callerPublicKey: string, id: number): Promise<EscrowRecord | null> {
   if (!CONTRACT_ID) return null;
   try {
@@ -1944,8 +2031,7 @@ export async function getEscrow(callerPublicKey: string, id: number): Promise<Es
       .build();
     const sim = await sorobanServer.simulateTransaction(tx);
     if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) return null;
-    const decoded = scValToNative(sim.result.retval) as any;
-    // contract returns the Escrow struct as a map keyed by field name
+    const decoded = scValToNative(sim.result.retval) as RawEscrowStruct;
     return {
       id: Number(decoded.id),
       from: decoded.from,
@@ -1953,14 +2039,14 @@ export async function getEscrow(callerPublicKey: string, id: number): Promise<Es
       token: decoded.token,
       amount: String(decoded.amount),
       releaseLedger: Number(decoded.release_ledger),
-      status:
-        decoded.status?.tag ?? decoded.status ?? "Pending",
+      status: resolveEscrowStatus(decoded.status),
     };
   } catch {
     return null;
   }
 }
 
+/** Fetch the latest closed ledger sequence number from the Soroban RPC server. */
 export async function getCurrentLedger(): Promise<number> {
   const latest = await sorobanServer.getLatestLedger();
   return latest.sequence;

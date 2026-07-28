@@ -6,6 +6,7 @@
 
 import { useToastContext } from "@/lib/ToastContext";
 
+/** React hook returning a `showToast(msg, type)` helper backed by the global ToastContext. */
 export function useToast() {
   const { addToast } = useToastContext();
 

@@ -5,7 +5,13 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { formatXLM, shortenAddress, formatUSD } from "@/utils/format";
+import VirtualizedList from "@/components/VirtualizedList";
+import { formatXLM, shortenAddress, formatUSD, exportTipsToCSV } from "@/utils/format";
+
+// Tip rows render virtualized past this count so long tip histories stay cheap to render.
+const VIRTUALIZE_THRESHOLD = 100;
+const ROW_HEIGHT_PX = 76;
+const VIRTUAL_VIEWPORT_HEIGHT_PX = ROW_HEIGHT_PX * 6;
 
 interface TipRecord {
   id: number;
@@ -96,6 +102,34 @@ export default function CreatorTipsDashboard({
     if (!stats?.totalByAsset?.XLM) return "0";
     return stats.totalByAsset.XLM.amount;
   };
+
+  const renderTipRow = (tip: TipRecord) => (
+    <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:border-stellar-500/20 transition-colors">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-stellar-500/10 border border-stellar-500/20 flex items-center justify-center">
+          <GiftIcon className="w-5 h-5 text-stellar-400" />
+        </div>
+        <div>
+          <p className="text-sm text-white font-medium">
+            {tip.amount} {tip.asset}
+          </p>
+          <p className="text-xs text-slate-400">
+            From: {shortenAddress(tip.senderPublicKey)}
+          </p>
+        </div>
+      </div>
+      <div className="text-right">
+        <p className="text-xs text-slate-400">
+          {formatTimestamp(tip.timestamp)}
+        </p>
+        {tip.memo && (
+          <p className="text-xs text-slate-400 mt-1 max-w-[200px] truncate">
+            &quot;{tip.memo}&quot;
+          </p>
+        )}
+      </div>
+    </div>
+  );
 
   if (!username) {
     return (
@@ -196,13 +230,23 @@ export default function CreatorTipsDashboard({
           <h3 className="font-display text-lg font-semibold text-white">
             Tips Received
           </h3>
-          <button
-            onClick={fetchTips}
-            className="text-xs text-stellar-400 hover:text-stellar-300 transition-colors flex items-center gap-1"
-          >
-            <RefreshIcon className="w-3 h-3" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => exportTipsToCSV(tips)}
+              disabled={tips.length === 0}
+              className="text-xs text-stellar-400 hover:text-stellar-300 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+            >
+              <DownloadIcon className="w-3 h-3" />
+              Export CSV
+            </button>
+            <button
+              onClick={fetchTips}
+              className="text-xs text-stellar-400 hover:text-stellar-300 transition-colors flex items-center gap-1"
+            >
+              <RefreshIcon className="w-3 h-3" />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -227,38 +271,16 @@ export default function CreatorTipsDashboard({
           </div>
         ) : (
           <>
-            <div className="space-y-2">
-              {tips.map((tip) => (
-                <div
-                  key={tip.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:border-stellar-500/20 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-stellar-500/10 border border-stellar-500/20 flex items-center justify-center">
-                      <GiftIcon className="w-5 h-5 text-stellar-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-white font-medium">
-                        {tip.amount} {tip.asset}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        From: {shortenAddress(tip.senderPublicKey)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-slate-400">
-                      {formatTimestamp(tip.timestamp)}
-                    </p>
-                    {tip.memo && (
-                      <p className="text-xs text-slate-400 mt-1 max-w-[200px] truncate">
-                        &quot;{tip.memo}&quot;
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <VirtualizedList
+              items={tips}
+              itemKey={(tip) => tip.id}
+              renderItem={renderTipRow}
+              itemHeight={ROW_HEIGHT_PX}
+              height={VIRTUAL_VIEWPORT_HEIGHT_PX}
+              threshold={VIRTUALIZE_THRESHOLD}
+              ariaLabel="Tips received"
+              className="space-y-2"
+            />
 
             {/* Pagination */}
             {stats && stats.totalTips > pageSize && (
@@ -302,6 +324,14 @@ function CopyIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
     </svg>
   );
 }
