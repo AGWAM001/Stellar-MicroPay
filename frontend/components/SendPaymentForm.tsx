@@ -40,7 +40,7 @@ import {
   ReceiptIcon,
 } from "@/components/icons";
 import clsx from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface SendPaymentFormProps {
   publicKey: string;
@@ -97,6 +97,7 @@ interface BarcodeDetectorLike {
 
 const RECENT_RECIPIENTS_KEY = "stellar-micropay:recent-recipients";
 const MAX_RECENT = 3;
+const DESTINATION_VALIDATION_DEBOUNCE_MS = 400;
 
 function createInitialStepTimings(): Record<PaymentStepId, PaymentStepTiming> {
   return {
@@ -160,6 +161,8 @@ export default function SendPaymentForm({
   const frameRequestRef = useRef<number | null>(null);
   const isDetectingRef = useRef(false);
   const destinationInputRef = useRef<HTMLInputElement | null>(null);
+  const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destinationValidationRequestRef = useRef(0);
 
   // Power-user shortcut: press "S" (when not already typing in a field and no
   // modal is open) to jump focus to the destination input (#264).
@@ -366,21 +369,25 @@ export default function SendPaymentForm({
     setResolvedPaymentDestination(null);
   }, [prefill]);
 
-  // Pre-validate destination account existence on the Stellar network (#294)
-  useEffect(() => {
-    if (!isValidStellarAddress(destination)) {
+  const validateDestinationAccount = useCallback((address: string) => {
+    const trimmedAddress = address.trim();
+    const requestId = destinationValidationRequestRef.current + 1;
+    destinationValidationRequestRef.current = requestId;
+
+    if (!isValidStellarAddress(trimmedAddress)) {
       setDestAccountWarning(null);
+      setIsCheckingDest(false);
       return;
     }
-    let cancelled = false;
+
     setIsCheckingDest(true);
     setDestAccountWarning(null);
-    server.loadAccount(destination)
+    server.loadAccount(trimmedAddress)
       .then(() => {
-        if (!cancelled) setDestAccountWarning(null);
+        if (destinationValidationRequestRef.current === requestId) setDestAccountWarning(null);
       })
       .catch(() => {
-        if (!cancelled) {
+        if (destinationValidationRequestRef.current === requestId) {
           setDestAccountWarning(
             selectedAsset === "XLM"
               ? "This account doesn't exist yet. Sending ≥ 1 XLM will create it."
@@ -389,10 +396,35 @@ export default function SendPaymentForm({
         }
       })
       .finally(() => {
-        if (!cancelled) setIsCheckingDest(false);
+        if (destinationValidationRequestRef.current === requestId) setIsCheckingDest(false);
       });
-    return () => { cancelled = true; };
-  }, [destination, selectedAsset]);
+  }, [selectedAsset]);
+
+  // Pre-validate destination account existence on the Stellar network (#294)
+  useEffect(() => {
+    if (destinationValidationTimeoutRef.current) {
+      clearTimeout(destinationValidationTimeoutRef.current);
+    }
+
+    if (!isValidStellarAddress(destination.trim())) {
+      destinationValidationRequestRef.current += 1;
+      setDestAccountWarning(null);
+      setIsCheckingDest(false);
+      return;
+    }
+
+    destinationValidationTimeoutRef.current = setTimeout(() => {
+      validateDestinationAccount(destination);
+      destinationValidationTimeoutRef.current = null;
+    }, DESTINATION_VALIDATION_DEBOUNCE_MS);
+
+    return () => {
+      if (destinationValidationTimeoutRef.current) {
+        clearTimeout(destinationValidationTimeoutRef.current);
+        destinationValidationTimeoutRef.current = null;
+      }
+    };
+  }, [destination, validateDestinationAccount]);
 
   const xlmBal = parseFloat(xlmBalance);
   const usdcBal = usdcBalance ? parseFloat(usdcBalance) : 0;
@@ -627,7 +659,16 @@ export default function SendPaymentForm({
 
   const setMaxAmount = () => setAmount(maxSend.toFixed(7));
 
+  const runImmediateDestinationValidation = () => {
+    if (destinationValidationTimeoutRef.current) {
+      clearTimeout(destinationValidationTimeoutRef.current);
+      destinationValidationTimeoutRef.current = null;
+    }
+    validateDestinationAccount(destination);
+  };
+
   const openConfirmation = () => {
+    runImmediateDestinationValidation();
     if (!canSubmit) return;
     setIsConfirmOpen(true);
   };
@@ -805,6 +846,7 @@ export default function SendPaymentForm({
                   "border-red-500/50"
               )}
               disabled={status !== "idle" || destinationReadOnly}
+              onBlur={runImmediateDestinationValidation}
             />
 
             {destinationResolutionError && (
