@@ -9,8 +9,54 @@ const analyticsService = require("../services/analyticsService");
 const stellarService = require("../services/stellarService");
 
 /**
+ * @typedef {object} AnalyticsSummary
+ * @property {string} publicKey
+ * @property {string} totalSentXLM
+ * @property {string} totalReceivedXLM
+ * @property {number} uniqueCounterparties
+ * @property {string} averageTransactionSize
+ * @property {number} totalTransactions
+ * @property {object} comparison
+ * @property {number} comparison.thisWeekCount
+ * @property {number} comparison.lastWeekCount
+ * @property {number} comparison.countChangePercent
+ * @property {string} comparison.thisWeekVolume
+ * @property {string} comparison.lastWeekVolume
+ * @property {number} comparison.volumeChangePercent
+ */
+
+/**
+ * @typedef {object} TopRecipientsResponse
+ * @property {string} publicKey
+ * @property {Array<{address: string, totalXLMSent: string}>} topRecipients
+ * @property {number} count
+ */
+
+/**
+ * @typedef {object} ActivityByDayResponse
+ * @property {string} publicKey
+ * @property {Array<{day: string, dayIndex: number, transactionCount: number}>} activityByDay
+ */
+
+/**
+ * @typedef {object} CohortBreakdownResponse
+ * @property {string} publicKey
+ * @property {"week"|"month"} period
+ * @property {number} periods
+ * @property {{start: string|null, end: string|null}} range
+ * @property {Array<object>} cohorts
+ */
+
+/**
  * GET /api/analytics/:publicKey/summary
  * Returns: total sent, received, unique counterparties, avg transaction size.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: AnalyticsSummary }`
  */
 async function getSummary(req, res, next) {
   try {
@@ -25,6 +71,13 @@ async function getSummary(req, res, next) {
 /**
  * GET /api/analytics/:publicKey/top-recipients
  * Returns: top 5 addresses by total XLM sent.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: TopRecipientsResponse }`
  */
 async function getTopRecipients(req, res, next) {
   try {
@@ -39,6 +92,13 @@ async function getTopRecipients(req, res, next) {
 /**
  * GET /api/analytics/:publicKey/activity
  * Returns: payment count by day of week (all 7 days).
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: ActivityByDayResponse }`
  */
 async function getActivityByDay(req, res, next) {
   try {
@@ -53,6 +113,16 @@ async function getActivityByDay(req, res, next) {
 /**
  * GET /api/analytics/:publicKey/cohorts
  * Returns repeat vs one-time counterparties grouped by period.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} req.query
+ * @param {"week"|"month"} [req.query.period] - Cohort bucket size, defaults to "month"
+ * @param {string} [req.query.periods] - Number of buckets to return (max 12, default 6)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: CohortBreakdownResponse }`
  */
 async function getCohortBreakdown(req, res, next) {
   try {
@@ -68,6 +138,15 @@ async function getCohortBreakdown(req, res, next) {
 /**
  * GET /api/analytics/:publicKey/stream
  * Server-sent events stream for new payment operations.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response (kept open as a `text/event-stream`)
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} SSE stream emitting `event: payment` with a JSON-encoded
+ *   PaymentRecord-like payload, `event: error` with `{ message: string }`, and periodic
+ *   `: heartbeat` comments
  */
 async function streamPayments(req, res, next) {
   try {
@@ -120,6 +199,17 @@ async function streamPayments(req, res, next) {
 /**
  * POST /api/analytics/:publicKey/export-schedule
  * Set up recurring email export.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} req.body
+ * @param {string} req.body.email - Destination email address
+ * @param {"daily"|"weekly"} req.body.frequency - Export cadence
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} 201 JSON: `{ success: true, data: { publicKey: string, email: string,
+ *   frequency: string, nextRunAt: string }, message: string }`
  */
 async function scheduleExport(req, res, next) {
   try {
@@ -135,6 +225,14 @@ async function scheduleExport(req, res, next) {
 /**
  * GET /api/analytics/:publicKey/export-schedule
  * Get scheduled export configuration.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: { publicKey: string, email: string,
+ *   frequency: string, nextRunAt: string } | null }`
  */
 async function getExportSchedule(req, res, next) {
   try {
@@ -149,6 +247,14 @@ async function getExportSchedule(req, res, next) {
 /**
  * POST /api/analytics/:publicKey/export-trigger
  * Manually trigger sending export email.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: { success: true }, message: string }`,
+ *   or 404 (via next) when no export schedule exists for this public key
  */
 async function triggerExport(req, res, next) {
   try {

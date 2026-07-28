@@ -9,7 +9,30 @@ const stellarService = require("../services/stellarService");
 const usernameService = require("../services/usernameService");
 
 /**
+ * @typedef {object} AccountBalanceEntry
+ * @property {string} assetCode
+ * @property {string} balance
+ * @property {string} [assetIssuer]
+ * @property {string} asset_type
+ */
+
+/**
+ * @typedef {object} AccountResponse
+ * @property {string} publicKey
+ * @property {string} sequence
+ * @property {AccountBalanceEntry[]} balances
+ * @property {number} subentryCount
+ */
+
+/**
  * GET /api/accounts/:publicKey
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: AccountResponse }`
  */
 async function getAccount(req, res, next) {
   try {
@@ -23,6 +46,13 @@ async function getAccount(req, res, next) {
 
 /**
  * GET /api/accounts/:publicKey/balance
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: { publicKey: string, xlm: string } }`
  */
 async function getBalance(req, res, next) {
   try {
@@ -37,6 +67,15 @@ async function getBalance(req, res, next) {
 /**
  * POST /api/accounts/register
  * Register a new username with a public key.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.body
+ * @param {string} req.body.username - Desired username (3-20 alphanumeric chars)
+ * @param {string} req.body.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} 201 JSON: `{ success: true, data: { username: string, publicKey: string }, message: string }`,
+ *   or 400 JSON: `{ error: string }` when username/publicKey are missing
  */
 async function registerUsername(req, res, next) {
   try {
@@ -62,6 +101,14 @@ async function registerUsername(req, res, next) {
 /**
  * GET /api/accounts/resolve/:username
  * Resolve a username to its associated public key.
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.username - Registered username to resolve
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ success: true, data: { username: string, publicKey: string } }`,
+ *   or 501 JSON: `{ error: string }` for the reserved "alice" username
  */
 async function resolveUsername(req, res, next) {
   try {

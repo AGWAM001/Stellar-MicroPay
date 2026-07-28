@@ -9,20 +9,17 @@ const crypto = require("crypto");
 const {
   Account,
   Asset,
-  Horizon,
   Keypair,
   Networks,
   Operation,
   Transaction,
   TransactionBuilder,
 } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
 const logger = require("../utils/logger");
 
-const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
 const NETWORK_PASSPHRASE =
   process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-
-const server = new Horizon.Server(HORIZON_URL);
 
 const deployments = new Map();
 const executionHistory = [];
