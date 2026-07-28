@@ -5,7 +5,13 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import VirtualizedList from "@/components/VirtualizedList";
 import { formatXLM, shortenAddress, formatUSD, exportTipsToCSV } from "@/utils/format";
+
+// Tip rows render virtualized past this count so long tip histories stay cheap to render.
+const VIRTUALIZE_THRESHOLD = 100;
+const ROW_HEIGHT_PX = 76;
+const VIRTUAL_VIEWPORT_HEIGHT_PX = ROW_HEIGHT_PX * 6;
 
 interface TipRecord {
   id: number;
@@ -96,6 +102,34 @@ export default function CreatorTipsDashboard({
     if (!stats?.totalByAsset?.XLM) return "0";
     return stats.totalByAsset.XLM.amount;
   };
+
+  const renderTipRow = (tip: TipRecord) => (
+    <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:border-stellar-500/20 transition-colors">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-stellar-500/10 border border-stellar-500/20 flex items-center justify-center">
+          <GiftIcon className="w-5 h-5 text-stellar-400" />
+        </div>
+        <div>
+          <p className="text-sm text-white font-medium">
+            {tip.amount} {tip.asset}
+          </p>
+          <p className="text-xs text-slate-400">
+            From: {shortenAddress(tip.senderPublicKey)}
+          </p>
+        </div>
+      </div>
+      <div className="text-right">
+        <p className="text-xs text-slate-400">
+          {formatTimestamp(tip.timestamp)}
+        </p>
+        {tip.memo && (
+          <p className="text-xs text-slate-400 mt-1 max-w-[200px] truncate">
+            &quot;{tip.memo}&quot;
+          </p>
+        )}
+      </div>
+    </div>
+  );
 
   if (!username) {
     return (
@@ -237,38 +271,16 @@ export default function CreatorTipsDashboard({
           </div>
         ) : (
           <>
-            <div className="space-y-2">
-              {tips.map((tip) => (
-                <div
-                  key={tip.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:border-stellar-500/20 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-stellar-500/10 border border-stellar-500/20 flex items-center justify-center">
-                      <GiftIcon className="w-5 h-5 text-stellar-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-white font-medium">
-                        {tip.amount} {tip.asset}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        From: {shortenAddress(tip.senderPublicKey)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-slate-400">
-                      {formatTimestamp(tip.timestamp)}
-                    </p>
-                    {tip.memo && (
-                      <p className="text-xs text-slate-400 mt-1 max-w-[200px] truncate">
-                        &quot;{tip.memo}&quot;
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <VirtualizedList
+              items={tips}
+              itemKey={(tip) => tip.id}
+              renderItem={renderTipRow}
+              itemHeight={ROW_HEIGHT_PX}
+              height={VIRTUAL_VIEWPORT_HEIGHT_PX}
+              threshold={VIRTUALIZE_THRESHOLD}
+              ariaLabel="Tips received"
+              className="space-y-2"
+            />
 
             {/* Pagination */}
             {stats && stats.totalTips > pageSize && (

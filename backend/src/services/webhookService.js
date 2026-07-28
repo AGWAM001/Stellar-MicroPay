@@ -1,12 +1,8 @@
 "use strict";
 
 const crypto = require("crypto");
-const { Horizon } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
 const logger = require("../utils/logger");
-require("dotenv").config();
-
-const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
-const server = new Horizon.Server(HORIZON_URL);
 
 // In-memory store: { id, publicKey, url, secret, createdAt }
 const webhooks = new Map();

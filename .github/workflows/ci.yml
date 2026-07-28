@@ -59,6 +59,9 @@ jobs:
           NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
           NEXT_PUBLIC_API_URL: http://localhost:4000
 
+      - name: Bundle size budget
+        run: npm run size
+
   # ─── Backend ───────────────────────────────────────────────────────────────
   backend:
     name: Backend (Node.js)
