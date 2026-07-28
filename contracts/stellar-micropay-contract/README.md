@@ -253,11 +253,12 @@ All amounts are `i128` stroop-denominated values unless a caller explicitly pass
   - `deposit: i128` - amount locked in the contract up front.
 - **Return value**: zero-based stream id.
 - **Authorization requirements**: `payer.require_auth()`.
-- **Events emitted**: `(stream_open, stream_id)` with `(payer, recipients, rate_per_ledger, deposit)`.
+- **Events emitted**: `(stream_open, stream_id)` with `(payer, recipients, weights, rate_per_ledger, deposit)`.
 - **Error conditions**:
   - Panics with `recipients and weights must have equal length` when the two lists differ in length.
   - Panics with `at least one recipient is required` when `recipients` is empty.
   - Panics with `weight must be positive` when any weight is `0`.
+  - Panics with `recipients must not contain duplicate addresses` when the same address appears more than once — a duplicate would only be reachable through its first entry, stranding the rest of its weight until `close_stream`.
   - Panics with `rate_per_ledger must be positive` when `rate_per_ledger <= 0`.
   - Panics with `deposit must be positive` when `deposit <= 0`.
   - Panics with `deposit below minimum` when `deposit < MIN_STREAM_DEPOSIT` (10_000 stroops).
@@ -435,6 +436,12 @@ value yet.
    `get_escrow_count()`, so a migration can walk ids `0..count`. Batch it
    across several transactions if the instance holds more entries than fit in
    one resource budget.
+   > Unlike `v1` (purely additive — new keys, no existing data to touch),
+   > `v2` changes the shape of `Stream` itself. `migrate()` only stamps the
+   > version number; it does not walk and rewrite existing entries. An
+   > in-place upgrade to `v2` while any `v1`-shaped `Stream` is still open in
+   > storage needs that rewrite step added here first, or `load_stream` will
+   > fail to decode it. Not needed for a fresh deployment.
 6. **Stamp the new version.**
    ```bash
    stellar contract invoke \

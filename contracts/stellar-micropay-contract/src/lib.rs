@@ -660,6 +660,16 @@ impl MicroPayContract {
                 panic!("weight must be positive");
             }
         }
+        // A duplicated address would only ever be reachable through its first
+        // list entry — find_recipient() returns the first match — silently
+        // stranding the rest of that recipient's weight until close_stream.
+        for i in 0..recipients.len() {
+            for j in (i + 1)..recipients.len() {
+                if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
+                    panic!("recipients must not contain duplicate addresses");
+                }
+            }
+        }
         if rate_per_ledger <= 0 {
             panic!("rate_per_ledger must be positive");
         }
@@ -719,7 +729,7 @@ impl MicroPayContract {
 
         env.events().publish(
             (Symbol::new(&env, "stream_open"), stream_id),
-            (payer, recipients, rate_per_ledger, deposit),
+            (payer, recipients, weights, rate_per_ledger, deposit),
         );
         stream_id
     }
@@ -1861,6 +1871,22 @@ mod tests {
             &payer,
             &soroban_sdk::vec![&env, recipient, second],
             &soroban_sdk::vec![&env, 1u32, 0u32],
+            &RATE,
+            &DEPOSIT,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "recipients must not contain duplicate addresses")]
+    fn test_open_stream_rejects_duplicate_recipient() {
+        let env = Env::default();
+        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
+
+        client.open_stream(
+            &token_id,
+            &payer,
+            &soroban_sdk::vec![&env, recipient.clone(), recipient],
+            &soroban_sdk::vec![&env, 1u32, 1u32],
             &RATE,
             &DEPOSIT,
         );
