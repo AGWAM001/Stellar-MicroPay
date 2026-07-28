@@ -14,7 +14,7 @@ const router = express.Router();
 
 router.get("/", strictLimiter, controller.list);
 router.post("/challenge", strictLimiter, controller.createChallenge);
-router.post("/deploy", strictLimiter, controller.deploy);
+router.post("/deploy", strictLimiter, verifyJWT, controller.deploy);
 router.get("/audit/log", strictLimiter, controller.getAuditLog);
 router.get("/:id", strictLimiter, controller.getOne);
 router.get("/:id/history", strictLimiter, controller.getHistory);

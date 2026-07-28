@@ -11,8 +11,18 @@ const stellarService = require("./stellarService");
 
 // ─── Cache Configuration ──────────────────────────────────────────────────────
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
+const CACHE_TTL = 60 * 1000; // 60 seconds in milliseconds
 const cache = new Map();
+
+// Periodically clean up expired cache entries to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of cache.entries()) {
+    if (now - value.timestamp >= CACHE_TTL) {
+      cache.delete(key);
+    }
+  }
+}, Math.max(CACHE_TTL, 60000)).unref();
 
 /**
  * Cache wrapper function.
