@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 
+/** React hook that animates a number counting up to `target` over `duration` ms, optionally starting only once the element scrolls into view. */
 export function useCountUp(target: number, duration: number = 2000, startOnView: boolean = true) {
   const [count, setCount] = useState(0);
   const [isVisible, setIsVisible] = useState(!startOnView);

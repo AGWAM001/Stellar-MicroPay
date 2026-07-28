@@ -91,6 +91,7 @@ export const STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM =
 const STELLAR_BASE_FEE_STROOPS_STRING = String(STELLAR_BASE_FEE_STROOPS);
 const ELEVATED_FEE_MAX_STROOPS = STELLAR_BASE_FEE_STROOPS * 10;
 
+/** Truncate a memo string so its UTF-8 encoding fits within the Stellar MEMO_TEXT byte limit. */
 export function truncateMemoText(memo: string): string {
   const encoder = new TextEncoder();
   if (encoder.encode(memo).length <= STELLAR_MEMO_TEXT_MAX_BYTES) {
@@ -160,6 +161,7 @@ export const SOROBAN_RPC_URL = getSorobanRpcUrl();
 
 /** Pre-configured Soroban RPC server instance. */
 let _sorobanServer: rpc.Server | null = null;
+/** Returns a cached Soroban RPC server instance, recreating it if the network URL has changed. */
 export function getSorobanServer(): rpc.Server {
   const currentUrl = getSorobanRpcUrl();
   if (!_sorobanServer || _sorobanServer.serverURL.toString() !== currentUrl) {
@@ -1285,6 +1287,7 @@ export async function getReceiptCount(payer: string): Promise<number> {
   }
 }
 
+/** Fetch the most recent payments for an account in chronological order, for sparkline charts. */
 export async function getRecentPaymentsForSparkline(
   publicKey: string,
   limit = 10
@@ -1854,6 +1857,7 @@ export interface EscrowRecord {
   status: "Pending" | "Released" | "Cancelled";
 }
 
+/** Build and preflight a Soroban transaction that creates a new escrow locking funds for a recipient until a release ledger. */
 export async function buildCreateEscrowTransaction({
   fromPublicKey,
   toPublicKey,
@@ -1917,30 +1921,17 @@ async function buildEscrowMutation(
   return sorobanServer.prepareTransaction(tx);
 }
 
+/** Build and preflight a Soroban transaction that claims a released escrow by id. */
 export function buildClaimEscrowTransaction(fromPublicKey: string, id: number) {
   return buildEscrowMutation(fromPublicKey, "claim_escrow", id);
 }
 
+/** Build and preflight a Soroban transaction that cancels a pending escrow by id. */
 export function buildCancelEscrowTransaction(fromPublicKey: string, id: number) {
   return buildEscrowMutation(fromPublicKey, "cancel_escrow", id);
 }
 
-interface RawEscrowStruct {
-  id: number | string;
-  from: string;
-  to: string;
-  token: string;
-  amount: number | string;
-  release_ledger: number | string;
-  status?: { tag?: string } | string;
-}
-
-function resolveEscrowStatus(raw: RawEscrowStruct["status"]): EscrowRecord["status"] {
-  if (raw == null) return "Pending";
-  if (typeof raw === "string") return raw as EscrowRecord["status"];
-  return (raw.tag ?? "Pending") as EscrowRecord["status"];
-}
-
+/** Fetch an escrow record by id from the contract, returning null if it does not exist or the query fails. */
 export async function getEscrow(callerPublicKey: string, id: number): Promise<EscrowRecord | null> {
   if (!CONTRACT_ID) return null;
   try {
@@ -1969,6 +1960,7 @@ export async function getEscrow(callerPublicKey: string, id: number): Promise<Es
   }
 }
 
+/** Fetch the latest closed ledger sequence number from the Soroban RPC server. */
 export async function getCurrentLedger(): Promise<number> {
   const latest = await sorobanServer.getLatestLedger();
   return latest.sequence;

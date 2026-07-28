@@ -31,7 +31,20 @@ export interface TurretsExecutionHistory {
   createdAt: string;
 }
 
-export function createTurretsChallenge(params: {
+function apiBase() {
+  return process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+}
+
+async function parseJson(res: Response) {
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error || "Turrets API request failed");
+  }
+  return json.data;
+}
+
+/** Request a signed-challenge XDR from the backend for deploying a new Turrets automation. */
+export async function createTurretsChallenge(params: {
   ownerPublicKey: string;
   type: TurretsType;
   config: Record<string, unknown>;
@@ -47,7 +60,8 @@ export function createTurretsChallenge(params: {
   });
 }
 
-export function deployTurretsFunction(params: {
+/** Submit the signed challenge to deploy a new Turrets automation and return the created deployment. */
+export async function deployTurretsFunction(params: {
   ownerPublicKey: string;
   type: TurretsType;
   config: Record<string, unknown>;
@@ -60,28 +74,33 @@ export function deployTurretsFunction(params: {
   });
 }
 
-export function listTurretsFunctions(ownerPublicKey: string) {
-  return apiFetch<TurretsDeployment[]>(
-    `/api/turrets?ownerPublicKey=${encodeURIComponent(ownerPublicKey)}`,
+/** Fetch all Turrets deployments owned by the given public key. */
+export async function listTurretsFunctions(ownerPublicKey: string) {
+  const res = await fetch(
+    `${apiBase()}/api/turrets?ownerPublicKey=${encodeURIComponent(ownerPublicKey)}`
   );
 }
 
-export function getTurretsHistory(id: string) {
-  return apiFetch<TurretsExecutionHistory[]>(
-    `/api/turrets/${encodeURIComponent(id)}/history`,
-  );
+/** Fetch the execution history for a Turrets deployment by id. */
+export async function getTurretsHistory(id: string) {
+  const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/history`);
+  return parseJson(res) as Promise<TurretsExecutionHistory[]>;
 }
 
-export function pauseTurretsFunction(id: string) {
-  return apiFetch<TurretsDeployment>(
-    `/api/turrets/${encodeURIComponent(id)}/pause`,
-    { method: "POST" },
-  );
+/** Pause an active Turrets deployment by id. */
+export async function pauseTurretsFunction(id: string) {
+  const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/pause`, {
+    method: "POST",
+  });
+
+  return parseJson(res) as Promise<TurretsDeployment>;
 }
 
-export function resumeTurretsFunction(id: string) {
-  return apiFetch<TurretsDeployment>(
-    `/api/turrets/${encodeURIComponent(id)}/resume`,
-    { method: "POST" },
-  );
+/** Resume a paused Turrets deployment by id. */
+export async function resumeTurretsFunction(id: string) {
+  const res = await fetch(`${apiBase()}/api/turrets/${encodeURIComponent(id)}/resume`, {
+    method: "POST",
+  });
+
+  return parseJson(res) as Promise<TurretsDeployment>;
 }

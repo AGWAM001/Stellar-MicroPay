@@ -35,6 +35,7 @@ const ToastContext = createContext<ToastContextValue | undefined>(undefined);
 
 let _counter = 0;
 
+/** Provides the toast context, managing the stacked toast list and auto-dismiss timers for descendants. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -77,6 +78,7 @@ const NOOP_CTX: ToastContextValue = {
   removeToast: () => {},
 };
 
+/** Access the toast context, falling back to a no-op implementation when used outside a ToastProvider. */
 export function useToastContext(): ToastContextValue {
   return useContext(ToastContext) ?? NOOP_CTX;
 }
