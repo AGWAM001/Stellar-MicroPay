@@ -26,6 +26,7 @@ const webhookRoutes = require("./routes/webhooks");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
+const { resumeAllMonitors } = require("./services/paymentMonitor");
 const logger = require("./utils/logger");
 const { validateEnv, parseAllowedOrigins } = require("./config/validateEnv");
 
@@ -298,6 +299,9 @@ if (require.main === module) {
   });
 
   startTurretsServer();
+
+  // Resume SSE monitoring for all webhooks that existed before restart
+  resumeAllMonitors();
 }
 
 module.exports = app;
