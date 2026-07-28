@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Freighter setup instructions for new contributors, including testnet account creation and Friendbot funding.
 - Soroban contract function reference covering parameters, return values, authorization, events, and error conditions.
 - Project changelog.
+- Lighthouse CI workflow auditing the dashboard, pay, and tip pages against documented performance/accessibility/best-practices/SEO score thresholds.
+- Release Please workflow to open an auto-updated CHANGELOG release PR from conventional commits on `main`.
+- Dependabot auto-merge workflow for patch/minor update PRs once required checks pass.
+- Security audit workflow running `npm audit` (frontend/backend) and `cargo audit` (contracts), gated on high/critical findings.
 
 ## [1.0.0] - 2026-06-01
 
