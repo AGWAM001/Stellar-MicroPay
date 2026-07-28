@@ -56,9 +56,27 @@ function getOne(req, res, next) {
 function getHistory(req, res, next) {
   try {
     const { id } = req.params;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+
     turretsService.getDeployment(id);
-    const data = turretsService.getExecutionHistory(id);
-    res.json({ success: true, data });
+    const history = turretsService.getExecutionHistory(id);
+
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+    
+    const paginatedData = history.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedData,
+      pagination: {
+        total: history.length,
+        page,
+        limit,
+        pages: Math.ceil(history.length / limit)
+      }
+    });
   } catch (err) {
     next(err);
   }
