@@ -17,6 +17,8 @@ import {
   TurretsDeployment,
 } from "@/lib/turrets";
 import { shortenAddress } from "@/lib/stellar";
+import { useTheme } from "@/contexts/ThemeContext";
+import { resetOnboardingTour } from "@/hooks/useOnboarding";
 
 interface SettingsPageProps {
   publicKey: string | null;
@@ -30,6 +32,7 @@ export default function SettingsPage({
   onConnect,
   onDisconnect,
 }: SettingsPageProps) {
+  const { theme, toggleTheme, schedule, setSchedule } = useTheme();
   const [config, setConfig] = useState<NetworkConfig>({
     network: "testnet",
     horizonUrl: "https://horizon-testnet.stellar.org",
@@ -64,6 +67,14 @@ export default function SettingsPage({
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [usernameSuccess, setUsernameSuccess] = useState<string | null>(null);
   const [registeredUsername, setRegisteredUsername] = useState<string | null>(null);
+
+  // Onboarding tour replay (#621)
+  const [tourResetMessage, setTourResetMessage] = useState<string | null>(null);
+
+  const handleReplayTour = () => {
+    resetOnboardingTour();
+    setTourResetMessage("Tour reset — it will show again next time you open the dashboard.");
+  };
 
   // Fetch current username on mount
   useEffect(() => {
@@ -332,6 +343,126 @@ export default function SettingsPage({
               <p className="text-slate-600 dark:text-slate-400">
                 Configure your Stellar network preferences
               </p>
+            </div>
+
+            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">
+                Appearance
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">
+                Control how the app looks. Enable auto dark mode to switch automatically based on the time of day.
+              </p>
+
+              {/* Manual toggle row */}
+              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Dark mode
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {schedule.autoEnabled
+                      ? "Managed by schedule – click to override for this session"
+                      : "Toggle manually"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  aria-pressed={theme === "dark"}
+                  aria-label="Toggle dark mode"
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-stellar-500 focus:ring-offset-2 dark:focus:ring-offset-cosmos-900 ${
+                    theme === "dark" ? "bg-stellar-500" : "bg-slate-300 dark:bg-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${
+                      theme === "dark" ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Auto schedule toggle */}
+              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Auto dark mode at night
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Automatically switch to dark mode during configured hours
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSchedule({ autoEnabled: !schedule.autoEnabled })
+                  }
+                  aria-pressed={schedule.autoEnabled}
+                  aria-label="Toggle automatic dark mode schedule"
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-stellar-500 focus:ring-offset-2 dark:focus:ring-offset-cosmos-900 ${
+                    schedule.autoEnabled
+                      ? "bg-stellar-500"
+                      : "bg-slate-300 dark:bg-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${
+                      schedule.autoEnabled ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Night window pickers – only shown when auto is enabled */}
+              {schedule.autoEnabled && (
+                <div className="pt-4 space-y-4">
+                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                    Night window
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label
+                        htmlFor="night-start"
+                        className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                      >
+                        Dark mode starts
+                      </label>
+                      <input
+                        id="night-start"
+                        type="time"
+                        value={schedule.nightStart}
+                        onChange={(e) =>
+                          setSchedule({ nightStart: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="night-end"
+                        className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                      >
+                        Dark mode ends
+                      </label>
+                      <input
+                        id="night-end"
+                        type="time"
+                        value={schedule.nightEnd}
+                        onChange={(e) =>
+                          setSchedule({ nightEnd: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    Uses your device&apos;s local time. Overnight windows (e.g.{" "}
+                    <span className="font-mono">20:00 – 07:00</span>) are
+                    supported. You can still toggle manually to override for the
+                    current session.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
@@ -668,6 +799,30 @@ export default function SettingsPage({
                 </div>
               </div>
             )}
+
+            {/* Help & Onboarding — manually re-trigger the dashboard tour (#621) */}
+            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">
+                Help & Onboarding
+              </h2>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                Replay the guided tour that highlights your balance, the send form, and transaction history.
+              </p>
+              <button
+                onClick={handleReplayTour}
+                className="px-4 py-2 bg-stellar-500 hover:bg-stellar-600 text-white font-medium rounded-lg transition-colors"
+              >
+                Replay onboarding tour
+              </button>
+              {tourResetMessage && (
+                <p className="text-sm text-emerald-500 dark:text-emerald-400 mt-3">
+                  {tourResetMessage}{" "}
+                  <Link href="/dashboard" className="underline hover:no-underline">
+                    Go to dashboard →
+                  </Link>
+                </p>
+              )}
+            </div>
           </div>
         </main>
       </div>

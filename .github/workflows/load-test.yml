@@ -1,0 +1,87 @@
+name: Load Test
+
+# Run the autocannon-based backend load test on a nightly schedule and
+# on manual dispatch. Results are saved as a workflow artifact for analysis.
+
+on:
+  schedule:
+    # Every night at 03:00 UTC
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Backend API URL to test"
+        required: true
+        default: "https://staging.stellarmicropay.io"
+      connections:
+        description: "Number of concurrent connections"
+        required: false
+        default: "100"
+      duration:
+        description: "Test duration in seconds"
+        required: false
+        default: "30"
+      slo:
+        description: "p95 SLO threshold in milliseconds"
+        required: false
+        default: "500"
+
+jobs:
+  load-test:
+    name: Run backend load test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine target & parameters
+        id: params
+        run: |
+          API_URL="${{ github.event.inputs.api_url || 'https://staging.stellarmicropay.io' }}"
+          CONNECTIONS="${{ github.event.inputs.connections || '100' }}"
+          DURATION="${{ github.event.inputs.duration || '30' }}"
+          SLO="${{ github.event.inputs.slo || '500' }}"
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "connections=$CONNECTIONS" >> "$GITHUB_OUTPUT"
+          echo "duration=$DURATION" >> "$GITHUB_OUTPUT"
+          echo "slo=$SLO" >> "$GITHUB_OUTPUT"
+
+      - name: Run load test
+        id: load-test
+        continue-on-error: true
+        run: |
+          PUBLIC_KEY="${{ secrets.LOAD_TEST_PUBLIC_KEY }}" \
+          API_URL="${{ steps.params.outputs.api_url }}" \
+          CONNECTIONS="${{ steps.params.outputs.connections }}" \
+          DURATION="${{ steps.params.outputs.duration }}" \
+          SLO="${{ steps.params.outputs.slo }}" \
+          node scripts/load-test.js 2>&1 | tee load-test-output.txt
+
+      - name: Save timestamped results
+        run: |
+          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
+          mkdir -p load-test-results
+          cp load-test-output.txt "load-test-results/${TIMESTAMP}-output.txt"
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results
+          path: load-test-results/
+          retention-days: 30
+
+      - name: Fail on SLO breach or errors
+        if: steps.load-test.outcome == 'failure'
+        run: |
+          echo "Load test did not pass SLO or encountered errors. See the uploaded artifact for details."
+          exit 1
