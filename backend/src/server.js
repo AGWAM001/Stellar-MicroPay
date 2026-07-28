@@ -7,6 +7,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const pinoHttp = require("pino-http");
 const rateLimit = require("express-rate-limit");
@@ -26,10 +27,19 @@ const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
 const logger = require("./utils/logger");
-const { validateEnv } = require("./config/validateEnv");
+const { validateEnv, parseAllowedOrigins } = require("./config/validateEnv");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// ─── Error message sanitization (#206) ───────────────────────────────────────
+// Stellar secret keys: 'S' + 55 base32 chars [A-Z2-7]. Strip before logging or
+// sending to Sentry/clients so a mis-routed key never appears in outputs.
+
+const STELLAR_SECRET_PATTERN = /S[A-Z2-7]{55}/g;
+function sanitizeMessage(msg) {
+  return typeof msg === "string" ? msg.replace(STELLAR_SECRET_PATTERN, "[REDACTED]") : msg;
+}
 
 // ─── Sentry ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +49,16 @@ Sentry.init({
   // Only enable in production unless SENTRY_DSN is explicitly set
   enabled: !!process.env.SENTRY_DSN,
   tracesSampleRate: 0.2,
+  // #206: strip Stellar secret keys from error messages before Sentry receives them
+  beforeSend(event) {
+    if (event.exception?.values) {
+      event.exception.values = event.exception.values.map((v) => ({
+        ...v,
+        value: sanitizeMessage(v.value),
+      }));
+    }
+    return event;
+  },
 });
 
 function stripProtocol(value) {
@@ -66,16 +86,91 @@ function getFederationServerUrl(req) {
   const domain = getFederationDomain(req);
   const protocol =
     process.env.FEDERATION_SERVER_PROTOCOL ||
-    (domain.startsWith("localhost") || domain.startsWith("127.0.0.1")
-      ? "http"
-      : "https");
+    (domain.startsWith("localhost") || domain.startsWith("127.0.0.1") ? "http" : "https");
 
   return `${protocol}://${domain}/federation`;
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
-app.use(helmet());
+/**
+ * Content-Security-Policy directives for this JSON API.
+ *
+ * The backend serves no HTML pages of its own except Swagger UI at /api/docs,
+ * so the policy is intentionally restrictive:
+ *
+ *  defaultSrc  – block everything not listed explicitly.
+ *  scriptSrc   – only same-origin scripts (Swagger UI bundles its own JS).
+ *  styleSrc    – same-origin + unsafe-inline (Swagger UI injects inline styles).
+ *  imgSrc      – same-origin + data URIs (Swagger UI logo).
+ *  connectSrc  – only same-origin fetch/XHR (all API calls go to self).
+ *  fontSrc     – same-origin only.
+ *  objectSrc   – none (no Flash / plugins).
+ *  frameSrc    – none (not embedded in iframes).
+ *  upgradeInsecureRequests – omitted intentionally; handled at the load-balancer
+ *                            level in production.
+ *
+ * Helmet v7+ ships with CSP *disabled* by default, so this must be explicit.
+ */
+const helmetOptions = {
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      // Disallow this API from being framed by any site (clickjacking defence,
+      // the CSP-level equivalent of X-Frame-Options: DENY).
+      frameAncestors: ["'none'"],
+      // Forbid <base> tag hijacking and form posts to third-party origins.
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  // HTTP Strict Transport Security — force HTTPS for two years, cover subdomains,
+  // and allow browser-preload-list inclusion. TLS is terminated at the
+  // load-balancer, so the header is emitted here for clients that reach us
+  // directly over HTTPS.
+  hsts: {
+    maxAge: 63072000, // 2 years
+    includeSubDomains: true,
+    preload: true,
+  },
+  // Send no referrer to other origins (avoids leaking API paths / tokens in
+  // Referer headers).
+  referrerPolicy: { policy: "no-referrer" },
+  // This JSON API should never be embedded cross-origin, nor share its window.
+  crossOriginResourcePolicy: { policy: "same-site" },
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  // Belt-and-braces clickjacking header for older clients that ignore CSP.
+  frameguard: { action: "deny" },
+  // Block Adobe cross-domain policy files.
+  permittedCrossDomainPolicies: { permittedPolicies: "none" },
+};
+
+// Remove the framework fingerprint header (helmet also does this, but disabling
+// at the Express level guarantees it even if helmet config changes).
+app.disable("x-powered-by");
+
+app.use(helmet(helmetOptions));
+// gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads
+// before they hit the wire. Must run before routes register their handlers so
+// res.write/res.end get wrapped for every response. SSE streams are excluded so
+// EventSource can receive incremental chunks without buffering delays.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path?.endsWith("/stream")) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+  })
+);
 // Structured JSON request logging (#269) — replaces morgan('dev'); reuses the
 // shared pino logger so HTTP logs are machine-parseable (Datadog/CloudWatch).
 app.use(pinoHttp({ logger }));
@@ -90,9 +185,10 @@ app.use((err, req, res, next) => {
 });
 
 // CORS
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
-  .split(",")
-  .map((o) => o.trim());
+// parseAllowedOrigins validates format at startup (see validateEnv.js) and
+// returns the trimmed list of origins that are safe to use at runtime.
+// Any malformed entries cause process.exit(1) before this line is reached.
+const { origins: allowedOrigins } = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
 
 app.use(
   cors({
@@ -142,7 +238,7 @@ app.use(limiter);
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.use("/api/auth",     authRoutes);
+app.use("/api/auth", authRoutes);
 app.use("/api/accounts", accountRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/webhooks", webhookRoutes);
@@ -153,11 +249,15 @@ app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
 
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: "Stellar MicroPay API Docs",
-  customCss: ".swagger-ui .topbar { display: none }",
-  swaggerOptions: { url: "/api/docs.json" },
-}));
+app.use(
+  "/api/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: "Stellar MicroPay API Docs",
+    customCss: ".swagger-ui .topbar { display: none }",
+    swaggerOptions: { url: "/api/docs.json" },
+  })
+);
 
 app.get("/api/docs.json", (req, res) => {
   res.setHeader("Content-Type", "application/json");
@@ -166,7 +266,7 @@ app.get("/api/docs.json", (req, res) => {
 
 // ─── 404 Handler ───────────────────────────────────────────────────────────────
 
-app.use((req, res, next) => {
+app.use((req, res) => {
   const sanitizedPath = req.path.replace(/[\r\n]/g, "");
   logger.warn({ method: req.method, path: sanitizedPath }, "Route not found");
   res.status(404).json({ error: "Route not found" });
@@ -180,8 +280,8 @@ Sentry.setupExpressErrorHandler(app);
 app.use((err, req, res, next) => {
   void next;
   const status = err.status || 500;
-  const message = err.message || "Internal Server Error";
-
+  const message = sanitizeMessage(err.message) || "Internal Server Error";
+  logger.error({ status, message }, "Request error");
   res.status(status).json({ error: message });
 });
 

@@ -1,0 +1,51 @@
+name: Stale issues and PRs
+
+# Automatically label issues and pull requests that have been inactive for a
+# configurable period. Exempted labels (help wanted, pinned, etc.) are
+# respected and will never be marked stale.
+
+on:
+  schedule:
+    # Runs every day at 09:00 UTC
+    - cron: "0 9 * * *"
+
+jobs:
+  stale:
+    name: Mark stale items
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Check for stale issues and PRs
+        uses: actions/stale@v9
+        with:
+          # ── Issues ──────────────────────────────────────────────────────
+          stale-issue-message: >
+            This issue has been automatically marked as stale because it has been
+            inactive for 90 days. If there is no further activity within 14 days,
+            it will be closed. You can remove the stale label or add a comment to
+            keep it open.
+          close-issue-message: >
+            This issue has been automatically closed due to inactivity. Feel free
+            to reopen if the issue persists or becomes relevant again.
+          days-before-issue-stale: 90
+          days-before-issue-close: 14
+
+          # ── Pull Requests ──────────────────────────────────────────────
+          stale-pr-message: >
+            This pull request has been automatically marked as stale because it
+            has been inactive for 60 days. If there is no further activity within
+            14 days, it will be closed. Please address any remaining feedback or
+            rebase if needed.
+          close-pr-message: >
+            This pull request has been automatically closed due to inactivity.
+            Feel free to reopen when you're ready to continue working on it.
+          days-before-pr-stale: 60
+          days-before-pr-close: 14
+
+          # ── Exemptions ─────────────────────────────────────────────────
+          # Never mark items with these labels as stale
+          exempt-issue-labels: help wanted,pinned,security,bug,enhancement
+          exempt-pr-labels: help wanted,pinned,security,dependencies

@@ -6,18 +6,69 @@
 
 "use strict";
 
-const { Horizon } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
 const logger = require("../utils/logger");
-require("dotenv").config();
-
-const HORIZON_URL =
-  process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
-
-const server = new Horizon.Server(HORIZON_URL);
 
 // ─── In-memory LRU cache for getAccount (5 s TTL) ────────────────────────────
 const ACCOUNT_CACHE_TTL_MS = 5_000;
 const ACCOUNT_CACHE_MAX = 256;
+
+// ─── Timeout + retry ──────────────────────────────────────────────────────────
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_RETRIES = 3;
+const PAYMENT_TYPES = new Set([
+  "payment",
+  "path_payment_strict_send",
+  "path_payment_strict_receive",
+]);
+
+function isTransientError(err) {
+  if (!err) return false;
+  const status = err?.response?.status ?? err?.status;
+  if (status === 404) return false; // definitive — don't retry
+  if (status >= 500) return true;
+  const msg = err?.message || "";
+  return (
+    msg.includes("ECONNRESET") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ENOTFOUND") ||
+    msg.includes("network") ||
+    err.name === "AbortError"
+  );
+}
+
+/**
+ * Run `fn` with a hard timeout and retry up to MAX_RETRIES times on
+ * transient errors, using exponential back-off (100 ms × 2^attempt).
+ */
+async function withTimeoutAndRetry(fn, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const result = await Promise.race([
+        fn(controller.signal),
+        new Promise((_, reject) =>
+          controller.signal.addEventListener("abort", () =>
+            reject(Object.assign(new Error("Horizon request timed out"), { name: "AbortError" }))
+          )
+        ),
+      ]);
+      clearTimeout(timer);
+      return result;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (!isTransientError(err) || attempt === MAX_RETRIES) throw err;
+      // Exponential back-off: 100 ms, 200 ms, 400 ms …
+      await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+    }
+  }
+  throw lastErr;
+}
 
 /** @type {Map<string, { value: object, expiresAt: number }>} */
 const accountCache = new Map();
@@ -59,7 +110,7 @@ async function getAccount(publicKey) {
   if (cached) return cached;
 
   try {
-    const account = await server.loadAccount(publicKey);
+    const account = await withTimeoutAndRetry(() => server.loadAccount(publicKey));
 
     const balances = account.balances.map((b) => {
       if (b.asset_type === "native") {
@@ -122,37 +173,17 @@ async function getPayments(publicKey, { limit = 20, cursor } = {}) {
     query = query.cursor(cursor);
   }
 
-  const result = await query.call();
+  const result = await withTimeoutAndRetry(() => query.call());
 
   const payments = [];
 
-  const PAYMENT_TYPES = new Set([
-    "payment",
-    "path_payment_strict_send",
-    "path_payment_strict_receive",
-  ]);
-
   for (const op of result.records) {
     if (!PAYMENT_TYPES.has(op.type)) continue;
-
-    // path_payment ops expose dest_asset_* and dest_amount for the received side
-    const isPathPayment = op.type !== "payment";
-    const isSent = op.from === publicKey;
-
-    let assetCode;
-    if (isPathPayment && !isSent) {
-      assetCode =
-        op.dest_asset_type === "native" ? "XLM" : op.dest_asset_code || "UNKNOWN";
-    } else {
-      assetCode =
-        op.asset_type === "native" ? "XLM" : op.asset_code || "UNKNOWN";
-    }
-
-    const amount = isPathPayment && !isSent ? op.dest_amount : op.amount;
+    const payment = await normalizePaymentOperation(op, publicKey);
 
     let memo;
     try {
-      const tx = await op.transaction();
+      const tx = await withTimeoutAndRetry(() => op.transaction());
       if (tx.memo_type === "text" && tx.memo) {
         memo = tx.memo;
       }
@@ -161,24 +192,81 @@ async function getPayments(publicKey, { limit = 20, cursor } = {}) {
       // memo is optional
     }
 
-    payments.push({
-      id: op.id,
-      type: isSent ? "sent" : "received",
-      amount,
-      asset: assetCode,
-      from: op.from,
-      to: op.to,
-      memo,
-      createdAt: op.created_at,
-      transactionHash: op.transaction_hash,
-      pagingToken: op.paging_token,
-    });
+    payments.push({ ...payment, memo });
   }
 
   return payments;
 }
 
+/**
+ * Stream new payment operations for a public key.
+ *
+ * Horizon handles reconnection internally. The caller receives normalized
+ * payment records for both payment and path-payment operations.
+ */
+function streamPaymentEvents(publicKey, { onPayment, onError } = {}) {
+  validatePublicKey(publicKey);
+
+  const close = server
+    .payments()
+    .forAccount(publicKey)
+    .order("asc")
+    .cursor("now")
+    .stream({
+      onmessage: async (op) => {
+        if (!PAYMENT_TYPES.has(op.type)) return;
+
+        try {
+          const payment = await normalizePaymentOperation(op, publicKey);
+          onPayment?.(payment);
+        } catch (error) {
+          onError?.(error);
+        }
+      },
+      onerror: (error) => {
+        logger.error({ err: error, publicKey }, "Payment stream error");
+        onError?.(error);
+      },
+    });
+
+  return () => {
+    try {
+      close?.();
+    } catch {
+      // swallow errors on close
+    }
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function normalizePaymentOperation(op, publicKey) {
+  const isPathPayment = op.type !== "payment";
+  const isSent = op.from === publicKey;
+
+  let assetCode;
+  if (isPathPayment && !isSent) {
+    assetCode =
+      op.dest_asset_type === "native" ? "XLM" : op.dest_asset_code || "UNKNOWN";
+  } else {
+    assetCode =
+      op.asset_type === "native" ? "XLM" : op.asset_code || "UNKNOWN";
+  }
+
+  const amount = isPathPayment && !isSent ? op.dest_amount : op.amount;
+
+  return {
+    id: op.id,
+    type: isSent ? "sent" : "received",
+    amount,
+    asset: assetCode,
+    from: op.from,
+    to: op.to,
+    createdAt: op.created_at,
+    transactionHash: op.transaction_hash,
+    pagingToken: op.paging_token,
+  };
+}
 
 function validatePublicKey(publicKey) {
   if (!publicKey || !/^G[A-Z0-9]{55}$/.test(publicKey)) {
@@ -192,6 +280,7 @@ module.exports = {
   getAccount,
   getXLMBalance,
   getPayments,
+  streamPaymentEvents,
   validatePublicKey,
   clearAccountCache,
 };

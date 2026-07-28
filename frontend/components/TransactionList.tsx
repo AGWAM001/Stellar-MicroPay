@@ -5,6 +5,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
+import type { FixedSizeList, ListOnItemsRenderedProps } from "react-window";
+import { withErrorBoundary } from "@/components/ErrorBoundary";
+import VirtualizedList from "@/components/VirtualizedList";
 import {
   getPaymentHistory,
   shortenAddress,
@@ -13,6 +16,7 @@ import {
   PaymentHistoryResponse,
 } from "@/lib/stellar";
 import { formatAsset, timeAgo, copyToClipboard } from "@/utils/format";
+import { loadAddressBookContacts, upsertAddressBookContact } from "@/lib/addressBook";
 import {
   HistoryIcon,
   ArrowUpIcon,
@@ -22,6 +26,11 @@ import {
   PrinterIcon,
 } from "@/components/icons";
 import clsx from "clsx";
+
+// Rows render virtualized past this count so long payment histories stay cheap to render.
+const VIRTUALIZE_THRESHOLD = 100;
+const ROW_HEIGHT_PX = 76;
+const VIRTUAL_VIEWPORT_HEIGHT_PX = ROW_HEIGHT_PX * 6;
 
 export type TransactionDirectionFilter = "all" | "sent" | "received";
 
@@ -122,7 +131,7 @@ export function filterPayments(
   });
 }
 
-export default function TransactionList({
+function TransactionList({
   publicKey,
   limit = 20,
   compact = false,
@@ -137,13 +146,20 @@ export default function TransactionList({
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [stalePaymentsAt, setStalePaymentsAt] = useState<number | null>(null);
   const router = useRouter();
 
+  const lastPagingTokenRef = useRef<string | undefined>(undefined);
+  const [infiniteScroll, setInfiniteScroll] = useState(false);
+  const virtualListRef = useRef<FixedSizeList>(null);
+  const fetchingMoreRef = useRef(false);
+
+  const visiblePayments = filterPayments(payments, filters);
+
   // Sentinel ref for IntersectionObserver — defer initial fetch until visible
   const containerRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -180,15 +196,16 @@ export default function TransactionList({
       } else {
         setLoading(true);
         updatePayments([]);
-        setNextCursor(undefined);
+        lastPagingTokenRef.current = undefined;
         setHasMore(true);
       }
       setError(null);
       try {
+        const cursorToUse = isLoadMore ? lastPagingTokenRef.current : undefined;
         const data: PaymentHistoryResponse = await getPaymentHistory(
           publicKey,
           limit,
-          isLoadMore ? nextCursor : undefined
+          cursorToUse
         );
 
         if (isLoadMore) {
@@ -212,7 +229,8 @@ export default function TransactionList({
         }
 
         setHasMore(data.hasMore);
-        setNextCursor(data.nextCursor);
+        const nextToken = data.records[data.records.length - 1]?.pagingToken;
+        lastPagingTokenRef.current = nextToken;
         setStalePaymentsAt(null);
       } catch (err) {
         const cached = !isLoadMore
@@ -221,7 +239,7 @@ export default function TransactionList({
         if (cached) {
           updatePayments(cached.records);
           setHasMore(cached.hasMore);
-          setNextCursor(cached.nextCursor);
+          lastPagingTokenRef.current = cached.records[cached.records.length - 1]?.pagingToken;
           setStalePaymentsAt(cached.savedAt);
           setError(null);
           return;
@@ -234,8 +252,27 @@ export default function TransactionList({
         setLoadingMore(false);
       }
     },
-    [publicKey, limit, nextCursor, updatePayments, onPaymentsChange]
+    [publicKey, limit, updatePayments, onPaymentsChange]
   );
+
+  // IntersectionObserver effect for Infinite Scroll
+  useEffect(() => {
+    if (!infiniteScroll || !hasMore || loadingMore || loading) return;
+
+    const el = loadMoreRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          fetchPayments(true);
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [infiniteScroll, hasMore, loadingMore, loading, fetchPayments]);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -250,6 +287,39 @@ export default function TransactionList({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const handleSaveContact = (address: string) => {
+    const existing = loadAddressBookContacts().find((contact) => contact.address === address);
+    const nickname = window.prompt(
+      existing ? "Update contact nickname:" : "Nickname for this contact:",
+      existing?.nickname || address.slice(0, 8)
+    );
+
+    if (!nickname) return;
+    upsertAddressBookContact({ nickname, address });
+  };
+
+  // When virtualized, "Load more" / infinite scroll can't rely on a DOM
+  // sentinel below the list (react-window scrolls its own inner viewport),
+  // so trigger the next page once the rendered window nears the end instead.
+  const handleVirtualItemsRendered = useCallback(
+    ({ visibleStopIndex }: ListOnItemsRenderedProps) => {
+      if (!infiniteScroll || !hasMore || loading || fetchingMoreRef.current) return;
+      if (visibleStopIndex < visiblePayments.length - 5) return;
+
+      fetchingMoreRef.current = true;
+      fetchPayments(true).finally(() => {
+        fetchingMoreRef.current = false;
+      });
+    },
+    [infiniteScroll, hasMore, loading, fetchPayments, visiblePayments.length]
+  );
+
+  // Keep the focused row scrolled into view for keyboard navigation once virtualized.
+  useEffect(() => {
+    if (focusedIndex < 0) return;
+    virtualListRef.current?.scrollToItem(focusedIndex, "smart");
+  }, [focusedIndex]);
+
   // Prepend a newly streamed payment if it doesn't already exist
   useEffect(() => {
     if (!incomingPayment) return;
@@ -263,9 +333,133 @@ export default function TransactionList({
     });
   }, [incomingPayment, onPaymentsChange]);
 
-  const visiblePayments = filterPayments(payments, filters);
   const hasActiveFilters =
     filters.direction !== "all" || filters.minAmount.trim() !== "" || filters.memoSearch.trim() !== "";
+
+  const renderPaymentRow = (tx: PaymentRecord, index: number) => (
+    <div
+      role="listitem"
+      tabIndex={focusedIndex === index ? 0 : -1}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.min(prev + 1, visiblePayments.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.max(prev - 1, 0));
+        } else if (e.key === "Enter" && focusedIndex === index) {
+          e.preventDefault();
+          const address = tx.type === "sent" ? tx.to : tx.from;
+          copyToClipboard(address);
+          setCopiedId(tx.id);
+          setTimeout(() => setCopiedId(null), 2000);
+        }
+      }}
+      onBlur={() => setFocusedIndex(-1)}
+      onFocus={() => setFocusedIndex(index)}
+      className={clsx(
+        "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
+        focusedIndex === index && "outline-none ring-2 ring-stellar-500 ring-offset-2"
+      )}
+      aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${tx.type === "sent" ? tx.to : tx.from}`}
+    >
+      {/* Direction icon */}
+      <div
+        className={clsx(
+          "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
+          tx.type === "sent"
+            ? "bg-red-500/10 border border-red-500/20"
+            : "bg-emerald-500/10 border border-emerald-500/20"
+        )}
+      >
+        {tx.type === "sent" ? (
+          <ArrowUpIcon className="w-4 h-4 text-red-400" />
+        ) : (
+          <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
+        )}
+      </div>
+
+      {/* Details */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-200 capitalize">
+            {tx.type === "sent" ? "Sent to" : "Received from"}
+          </span>
+          <button
+            onClick={() =>
+              handleCopy(
+                tx.type === "sent" ? tx.to : tx.from,
+                tx.id
+              )
+            }
+            aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
+            className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
+          >
+            {copiedId === tx.id
+              ? "Copied!"
+              : shortenAddress(tx.type === "sent" ? tx.to : tx.from, 5)}
+          </button>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-slate-400">
+            {timeAgo(tx.createdAt)}
+          </span>
+          {tx.memo && (
+            <span className="text-xs text-slate-600 truncate max-w-32">
+              · &ldquo;{tx.memo}&rdquo;
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Amount + link */}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span
+          className={clsx(
+            "text-sm font-mono font-medium",
+            tx.type === "sent" ? "text-red-400" : "text-emerald-400"
+          )}
+        >
+          {tx.type === "sent" ? "-" : "+"}
+          {formatAsset(tx.amount, tx.asset)}
+        </span>
+
+        <button
+          onClick={() => handleSaveContact(tx.type === "sent" ? tx.to : tx.from)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+          title="Save this address to contacts"
+          aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
+        >
+          Save contact
+        </button>
+
+        {/* Send Again — only for sent transactions */}
+        {tx.type === "sent" && (
+          <button
+            onClick={() =>
+              router.push(`/dashboard?to=${encodeURIComponent(tx.to)}&amount=${encodeURIComponent(tx.amount)}`)
+            }
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+            title="Pre-fill send form with this transaction"
+            aria-label="Send again to this recipient"
+          >
+            Send again
+          </button>
+        )}
+
+        <a
+          href={explorerUrl(tx.transactionHash) ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
+          title="View on Stellar Expert"
+          aria-label="View transaction on Stellar Expert"
+        >
+          <ExternalLinkIcon className="w-3.5 h-3.5" />
+        </a>
+      </div>
+    </div>
+  );
 
   if (loading) {
     return (
@@ -352,13 +546,38 @@ export default function TransactionList({
                 <HistoryIcon className="w-5 h-5 text-stellar-400" />
                 Recent Payments
               </h2>
-              <button
-                onClick={() => fetchPayments()}
-                className="text-xs text-slate-400 hover:text-stellar-400 transition-colors flex items-center gap-1"
-              >
-                <RefreshIcon className="w-3.5 h-3.5" />
-                Refresh
-              </button>
+              <div className="flex items-center gap-4">
+                {/* Premium Infinite Scroll Toggle */}
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 select-none">
+                  <span className={clsx("transition-colors", infiniteScroll ? "text-stellar-400 font-medium" : "")}>
+                    Infinite Scroll
+                  </span>
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={infiniteScroll}
+                      onChange={(e) => setInfiniteScroll(e.target.checked)}
+                      aria-label="Toggle infinite scroll"
+                    />
+                    <div className={clsx(
+                      "w-8 h-4 rounded-full transition-colors duration-200 ease-in-out",
+                      infiniteScroll ? "bg-stellar-500/30 border border-stellar-400/40" : "bg-white/10 border border-white/5"
+                    )} />
+                    <div className={clsx(
+                      "absolute left-0.5 top-0.5 w-3 h-3 rounded-full bg-white transition-transform duration-200 ease-in-out shadow-sm",
+                      infiniteScroll ? "transform translate-x-4 bg-stellar-300" : "bg-slate-400"
+                    )} />
+                  </div>
+                </label>
+                <button
+                  onClick={() => fetchPayments()}
+                  className="text-xs text-slate-400 hover:text-stellar-400 transition-colors flex items-center gap-1"
+                >
+                  <RefreshIcon className="w-3.5 h-3.5" />
+                  Refresh
+                </button>
+              </div>
             </div>
           )}
 
@@ -373,130 +592,33 @@ export default function TransactionList({
             <span>Keyboard navigation: ↑ ↓ to navigate, Enter to copy address</span>
           </div>
           
-          <div
-            role="list"
-            aria-label="Payment history"
+          <VirtualizedList
+            items={visiblePayments}
+            itemKey={(tx) => tx.id}
+            renderItem={renderPaymentRow}
+            itemHeight={ROW_HEIGHT_PX}
+            height={VIRTUAL_VIEWPORT_HEIGHT_PX}
+            threshold={VIRTUALIZE_THRESHOLD}
+            ariaLabel="Payment history"
             className="space-y-2"
-          >
-        {visiblePayments.map((tx, index) => (
-          <div
-            key={tx.id}
-            role="listitem"
-            tabIndex={focusedIndex === index ? 0 : -1}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setFocusedIndex((prev) => Math.min(prev + 1, visiblePayments.length - 1));
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setFocusedIndex((prev) => Math.max(prev - 1, 0));
-              } else if (e.key === 'Enter' && focusedIndex === index) {
-                e.preventDefault();
-                const address = tx.type === "sent" ? tx.to : tx.from;
-                copyToClipboard(address);
-                setCopiedId(tx.id);
-                setTimeout(() => setCopiedId(null), 2000);
-              }
-            }}
-            onBlur={() => setFocusedIndex(-1)}
-            onFocus={() => setFocusedIndex(index)}
-            className={clsx(
-              "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
-              focusedIndex === index && "outline-none ring-2 ring-stellar-500 ring-offset-2"
+            listRef={virtualListRef}
+            onItemsRendered={handleVirtualItemsRendered}
+          />
+
+        {/* Infinite Scroll Sentinel / Loading Indicator */}
+        {infiniteScroll && (
+          <div ref={loadMoreRef} className="flex justify-center mt-4 py-2">
+            {loadingMore && (
+              <div className="flex items-center gap-2 text-slate-400">
+                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm">Loading more...</span>
+              </div>
             )}
-            aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${tx.type === "sent" ? tx.to : tx.from}`}
-          >
-            {/* Direction icon */}
-            <div
-              className={clsx(
-                "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-                tx.type === "sent"
-                  ? "bg-red-500/10 border border-red-500/20"
-                  : "bg-emerald-500/10 border border-emerald-500/20"
-              )}
-            >
-              {tx.type === "sent" ? (
-                <ArrowUpIcon className="w-4 h-4 text-red-400" />
-              ) : (
-                <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
-              )}
-            </div>
-
-            {/* Details */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-200 capitalize">
-                  {tx.type === "sent" ? "Sent to" : "Received from"}
-                </span>
-                <button
-                  onClick={() =>
-                    handleCopy(
-                      tx.type === "sent" ? tx.to : tx.from,
-                      tx.id
-                    )
-                  }
-                  aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
-                  className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
-                >
-                  {copiedId === tx.id
-                    ? "Copied!"
-                    : shortenAddress(tx.type === "sent" ? tx.to : tx.from, 5)}
-                </button>
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-slate-400">
-                  {timeAgo(tx.createdAt)}
-                </span>
-                {tx.memo && (
-                  <span className="text-xs text-slate-600 truncate max-w-32">
-                    · &ldquo;{tx.memo}&rdquo;
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Amount + link */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span
-                className={clsx(
-                  "text-sm font-mono font-medium",
-                  tx.type === "sent" ? "text-red-400" : "text-emerald-400"
-                )}
-              >
-                {tx.type === "sent" ? "-" : "+"}
-                {formatAsset(tx.amount, tx.asset)}
-              </span>
-
-              {/* Send Again — only for sent transactions */}
-              {tx.type === "sent" && (
-                <button
-                  onClick={() =>
-                    router.push(`/dashboard?to=${encodeURIComponent(tx.to)}&amount=${encodeURIComponent(tx.amount)}`)
-                  }
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-                  title="Pre-fill send form with this transaction"
-                  aria-label="Send again to this recipient"
-                >
-                  Send again
-                </button>
-              )}
-              
-              <a
-                href={explorerUrl(tx.transactionHash) ?? undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
-                title="View on Stellar Expert"
-                aria-label="View transaction on Stellar Expert"
-              >
-                <ExternalLinkIcon className="w-3.5 h-3.5" />
-              </a>
-            </div>
           </div>
-        ))}
+        )}
 
-        {/* Load more */}
-        {hasMore && payments.length > 0 && (
+        {/* Load more button (only when NOT using infinite scroll) */}
+        {!infiniteScroll && hasMore && payments.length > 0 && (
           <div className="flex justify-center mt-4">
             <button
               onClick={handleLoadMore}
@@ -514,8 +636,9 @@ export default function TransactionList({
             </button>
           </div>
         )}
-      </div>
     </div>
   );
 }
+
+export default withErrorBoundary(TransactionList, "TransactionList");
 
