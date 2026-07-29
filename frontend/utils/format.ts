@@ -76,6 +76,35 @@ export function formatAsset(
 }
 
 /**
+ * Format an asset amount at the asset's full precision, keeping trailing zeros
+ * (e.g. "10.0000000 XLM", "15.00 USDC").
+ *
+ * Use this where the exact ledger value matters — batch totals, receipts,
+ * confirmations — and `formatAsset` where a compact display is preferred.
+ * @param amount - The amount to format
+ * @param assetCode - The asset code (e.g., 'XLM', 'USDC')
+ */
+export function formatAssetPrecise(
+  amount: string | number,
+  assetCode = DEFAULT_ASSET_CODE
+): string {
+  const normalizedAssetCode = normalizeAssetCode(assetCode);
+  const rule = getAssetFormatRule(normalizedAssetCode);
+  const num = typeof amount === "string" ? parseFloat(amount) : amount;
+  const safeNum = amount == null || Number.isNaN(num) ? 0 : num;
+
+  return `${safeNum.toFixed(rule.maximumFractionDigits)} ${normalizedAssetCode}`;
+}
+
+/**
+ * Format an XLM amount at full 7-decimal precision (e.g. "10.0000000 XLM").
+ * @param amount - The amount to format
+ */
+export function formatXLMPrecise(amount: string | number): string {
+  return formatAssetPrecise(amount, "XLM");
+}
+
+/**
  * Converts a Soroban i128 (stroops) to a human-readable XLM string.
  * @param stroops - The amount in stroops (i128 from Soroban).
  */
@@ -226,6 +255,99 @@ export function parseAddressBookCSV(csv: string) {
       name: (cells[0] ?? "").trim(),
       address: (cells[1] ?? "").trim(),
       rowNumber: index + 1,
+    };
+  });
+}
+
+export interface BatchRecipientCSVRow {
+  /** 1-based line number in the source file, so users can fix the right row. */
+  rowNumber: number;
+  address: string;
+  amount: string;
+  memo: string;
+  /** Structural problem with the row, or null when the row looks importable. */
+  error: string | null;
+}
+
+const BATCH_CSV_COLUMNS = ["address", "amount", "memo"] as const;
+type BatchCSVColumn = (typeof BATCH_CSV_COLUMNS)[number];
+
+const BATCH_CSV_HEADER_ALIASES: Record<string, BatchCSVColumn> = {
+  address: "address",
+  recipient: "address",
+  "recipient address": "address",
+  destination: "address",
+  "public key": "address",
+  amount: "amount",
+  xlm: "amount",
+  "amount (xlm)": "amount",
+  memo: "memo",
+  note: "memo",
+};
+
+/**
+ * Parse a batch-payment recipient CSV with address, amount and memo columns.
+ *
+ * A header row is optional; when present its column names (including a few
+ * common aliases) decide the column order, otherwise the columns are read
+ * positionally as address, amount, memo.
+ *
+ * Rows are never dropped — a malformed row comes back with an `error` set so
+ * the caller can flag it without discarding the valid rows around it.
+ */
+export function parseBatchRecipientsCSV(csv: string): BatchRecipientCSVRow[] {
+  const rows = parseCSV(csv);
+  if (rows.length === 0) return [];
+
+  const headerCells = rows[0].map((cell) => cell.trim().toLowerCase());
+  const headerMatches = headerCells
+    .map((cell) => BATCH_CSV_HEADER_ALIASES[cell])
+    .filter((column): column is BatchCSVColumn => Boolean(column));
+  const hasHeader = headerMatches.includes("address") && headerMatches.includes("amount");
+
+  const columnIndex: Record<BatchCSVColumn, number> = {
+    address: 0,
+    amount: 1,
+    memo: 2,
+  };
+
+  if (hasHeader) {
+    BATCH_CSV_COLUMNS.forEach((column) => {
+      columnIndex[column] = headerCells.findIndex(
+        (cell) => BATCH_CSV_HEADER_ALIASES[cell] === column
+      );
+    });
+  }
+
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const lineOffset = hasHeader ? 2 : 1;
+
+  return dataRows.map((cells, index) => {
+    const cellAt = (column: BatchCSVColumn) => {
+      const position = columnIndex[column];
+      return position >= 0 ? (cells[position] ?? "").trim() : "";
+    };
+
+    const address = cellAt("address");
+    const amount = cellAt("amount");
+    const memo = cellAt("memo");
+    const parsedAmount = parseFloat(amount);
+
+    let error: string | null = null;
+    if (!address) {
+      error = "Missing recipient address.";
+    } else if (!amount) {
+      error = "Missing amount.";
+    } else if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      error = "Amount must be a number greater than 0.";
+    }
+
+    return {
+      rowNumber: index + lineOffset,
+      address,
+      amount,
+      memo,
+      error,
     };
   });
 }

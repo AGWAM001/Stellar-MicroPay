@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatXLM } from "@/utils/format";
 
 export interface RecurringSchedule {
   id: string;
@@ -245,7 +246,7 @@ export default function RecurringPayments({ onPayNow }: RecurringPaymentsProps) 
                   <span className="font-mono text-xs text-slate-400 mr-1">
                     {s.recipient.slice(0, 6)}…{s.recipient.slice(-4)}
                   </span>
-                  <span className="font-semibold text-white">{s.amount} XLM</span>
+                  <span className="font-semibold text-white">{formatXLM(s.amount)}</span>
                   {s.memo && <span className="text-slate-400 text-xs ml-1">· {s.memo}</span>}
                 </div>
                 <button
@@ -354,7 +355,7 @@ export default function RecurringPayments({ onPayNow }: RecurringPaymentsProps) 
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                  <span className="font-semibold text-sm text-white">{s.amount} XLM</span>
+                  <span className="font-semibold text-sm text-white">{formatXLM(s.amount)}</span>
                   <span className="text-xs text-slate-400 capitalize">{s.frequency}</span>
                   {s.paused && (
                     <span className="text-xs text-amber-400 font-medium">· Paused</span>
