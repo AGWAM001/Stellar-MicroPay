@@ -6,13 +6,16 @@ import TradeForm from "@/components/TradeForm";
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 
-const mockBuildPathPayment = jest.fn();
+const mockBuildPathPaymentStrictSend = jest.fn();
+const mockFetchStrictSendQuote = jest.fn();
 const mockBuildSellOffer = jest.fn();
 const mockBuildBuyOffer = jest.fn();
 const mockSubmitTransaction = jest.fn();
 
 jest.mock("@/lib/stellar", () => ({
-  buildPathPaymentTransaction: (...args: unknown[]) => mockBuildPathPayment(...args),
+  buildPathPaymentStrictSendTransaction: (...args: unknown[]) =>
+    mockBuildPathPaymentStrictSend(...args),
+  fetchStrictSendQuote: (...args: unknown[]) => mockFetchStrictSendQuote(...args),
   buildSellOfferTransaction: (...args: unknown[]) => mockBuildSellOffer(...args),
   buildBuyOfferTransaction: (...args: unknown[]) => mockBuildBuyOffer(...args),
   submitTransaction: (...args: unknown[]) => mockSubmitTransaction(...args),
@@ -61,7 +64,8 @@ describe("TradeForm", () => {
     jest.clearAllMocks();
 
     const fakeTx = { toXDR: () => "AAAA" };
-    mockBuildPathPayment.mockResolvedValue(fakeTx);
+    mockBuildPathPaymentStrictSend.mockResolvedValue(fakeTx);
+    mockFetchStrictSendQuote.mockResolvedValue({ destinationAmount: "20", path: [] });
     mockBuildSellOffer.mockResolvedValue(fakeTx);
     mockBuildBuyOffer.mockResolvedValue(fakeTx);
     mockSignTransaction.mockResolvedValue({ signedTxXdr: "SIGNED_XDR" });
@@ -142,17 +146,17 @@ describe("TradeForm", () => {
 
   // ── Market order submission ────────────────────────────────────────────────
 
-  it("calls buildPathPaymentTransaction for a market order", async () => {
+  it("calls buildPathPaymentStrictSendTransaction for a market order", async () => {
     const user = userEvent.setup();
     const { onSuccess, onTradeComplete } = renderTradeForm();
 
     await user.type(getAmountInput(), "10");
     await user.click(getSubmitButton());
 
-    await waitFor(() => expect(mockBuildPathPayment).toHaveBeenCalledTimes(1));
-    const callArgs = mockBuildPathPayment.mock.calls[0][0];
+    await waitFor(() => expect(mockBuildPathPaymentStrictSend).toHaveBeenCalledTimes(1));
+    const callArgs = mockBuildPathPaymentStrictSend.mock.calls[0][0];
     expect(callArgs.fromPublicKey).toBe(PUBLIC_KEY);
-    expect(callArgs.sendMax).toBe("10");
+    expect(callArgs.sendAmount).toBe("10");
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("Market order executed successfully!"));
     expect(onTradeComplete).toHaveBeenCalledTimes(1);
@@ -165,7 +169,7 @@ describe("TradeForm", () => {
     await user.type(getAmountInput(), "10");
     await user.click(getSubmitButton());
 
-    await waitFor(() => expect(mockBuildPathPayment).toHaveBeenCalled());
+    await waitFor(() => expect(mockBuildPathPaymentStrictSend).toHaveBeenCalled());
     await waitFor(() => expect(getAmountInput()).toHaveValue(null));
   });
 
@@ -198,7 +202,7 @@ describe("TradeForm", () => {
     expect(args.amount).toBe("5");
     expect(args.price).toBe("0.2");
 
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("Place Sell Order placed successfully!"));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("Sell order placed successfully!"));
   });
 
   it("calls buildBuyOfferTransaction for a limit buy order", async () => {
@@ -213,7 +217,7 @@ describe("TradeForm", () => {
     await user.click(getSubmitButton());
 
     await waitFor(() => expect(mockBuildBuyOffer).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("Place Buy Order placed successfully!"));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("Buy order placed successfully!"));
   });
 
   // ── Error handling ─────────────────────────────────────────────────────────
@@ -242,12 +246,110 @@ describe("TradeForm", () => {
     await waitFor(() => expect(onError).toHaveBeenCalledWith("Network timeout"));
   });
 
+  // ── Slippage tolerance (#619) ──────────────────────────────────────────────
+
+  describe("slippage tolerance", () => {
+    it("defaults to 0.5% and lets the user pick a preset", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      const slippageInput = screen.getByLabelText(/slippage tolerance/i);
+      expect(slippageInput).toHaveValue(0.5);
+
+      await user.click(screen.getByRole("button", { name: "1%" }));
+      expect(slippageInput).toHaveValue(1);
+    });
+
+    it("is hidden for limit orders", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      await user.click(screen.getByRole("button", { name: "Limit Order" }));
+      expect(screen.queryByLabelText(/slippage tolerance/i)).not.toBeInTheDocument();
+    });
+
+    it("sends a destination minimum reflecting the tolerance", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      await user.clear(screen.getByLabelText(/slippage tolerance/i));
+      await user.type(screen.getByLabelText(/slippage tolerance/i), "1");
+      await user.type(getAmountInput(), "10");
+      await user.click(getSubmitButton());
+
+      await waitFor(() => expect(mockBuildPathPaymentStrictSend).toHaveBeenCalledTimes(1));
+      const args = mockBuildPathPaymentStrictSend.mock.calls[0][0];
+      // Quote returns 20 units; 1% tolerance ⇒ 19.8 minimum
+      expect(args.destMin).toBe("19.8000000");
+      expect(args.sendAmount).toBe("10");
+      expect(args.path).toEqual([]);
+    });
+
+    it("uses the freshest quote and its path for the destination minimum", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      mockFetchStrictSendQuote.mockResolvedValue({
+        destinationAmount: "50",
+        path: ["HOP"],
+      });
+
+      await user.type(getAmountInput(), "10");
+      await user.click(getSubmitButton());
+
+      await waitFor(() => expect(mockBuildPathPaymentStrictSend).toHaveBeenCalledTimes(1));
+      const args = mockBuildPathPaymentStrictSend.mock.calls[0][0];
+      // 0.5% default tolerance on a 50-unit quote
+      expect(args.destMin).toBe("49.7500000");
+      expect(args.path).toEqual(["HOP"]);
+    });
+
+    it("shows the expected and minimum received amounts once quoted", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      await user.type(getAmountInput(), "10");
+
+      expect(await screen.findByText("20.00 USDC")).toBeInTheDocument();
+      expect(screen.getByText("19.90 USDC")).toBeInTheDocument();
+    });
+
+    it("errors and skips submission when no trade path exists", async () => {
+      const user = userEvent.setup();
+      const { onError } = renderTradeForm();
+
+      mockFetchStrictSendQuote.mockResolvedValue(null);
+
+      await user.type(getAmountInput(), "10");
+      await user.click(getSubmitButton());
+
+      await waitFor(() =>
+        expect(onError).toHaveBeenCalledWith("No trade path available for this asset pair.")
+      );
+      expect(mockBuildPathPaymentStrictSend).not.toHaveBeenCalled();
+    });
+
+    it("disables submission while the slippage tolerance is out of range", async () => {
+      const user = userEvent.setup();
+      renderTradeForm();
+
+      await user.type(getAmountInput(), "10");
+      await user.clear(screen.getByLabelText(/slippage tolerance/i));
+      await user.type(screen.getByLabelText(/slippage tolerance/i), "80");
+
+      expect(getSubmitButton()).toBeDisabled();
+      expect(
+        screen.getByText(/Enter a slippage tolerance between 0 and 50%/i)
+      ).toBeInTheDocument();
+    });
+  });
+
   it("shows Processing... while the trade is in flight", async () => {
     const user = userEvent.setup();
     renderTradeForm();
 
     // Delay resolution so we can observe the loading state
-    mockBuildPathPayment.mockImplementation(
+    mockBuildPathPaymentStrictSend.mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve({ toXDR: () => "AAAA" }), 200))
     );
 

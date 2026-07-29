@@ -1767,6 +1767,95 @@ export async function buildPathPaymentTransaction({
 }
 
 
+export interface StrictSendQuote {
+  /** Destination amount the best available path currently returns. */
+  destinationAmount: string;
+  /** Intermediate hops of that path (empty for a direct pair). */
+  path: Asset[];
+}
+
+function toAsset(record: {
+  asset_type: string;
+  asset_code?: string;
+  asset_issuer?: string;
+}): Asset {
+  if (record.asset_type === "native") return Asset.native();
+  return new Asset(record.asset_code as string, record.asset_issuer as string);
+}
+
+/**
+ * Quote a strict-send trade: how much of `destAsset` the DEX would currently
+ * return for `sendAmount` of `sendAsset`, plus the path that achieves it.
+ *
+ * Returns null when no path exists for the pair.
+ */
+export async function fetchStrictSendQuote(
+  sendAsset: Asset,
+  sendAmount: string,
+  destAsset: Asset
+): Promise<StrictSendQuote | null> {
+  const result = await server
+    .strictSendPaths(sendAsset, sendAmount, [destAsset])
+    .call();
+
+  const best = result.records.reduce<(typeof result.records)[number] | null>(
+    (bestSoFar, record) =>
+      !bestSoFar ||
+      parseFloat(record.destination_amount) > parseFloat(bestSoFar.destination_amount)
+        ? record
+        : bestSoFar,
+    null
+  );
+
+  if (!best) return null;
+
+  return {
+    destinationAmount: best.destination_amount,
+    path: (best.path ?? []).map(toAsset),
+  };
+}
+
+/**
+ * Build a strict-send path payment: an exact amount of `sendAsset` leaves the
+ * account and the transaction fails unless at least `destMin` of `destAsset`
+ * arrives — which is how slippage tolerance is enforced on-chain.
+ */
+export async function buildPathPaymentStrictSendTransaction({
+  fromPublicKey,
+  toPublicKey,
+  sendAsset,
+  sendAmount,
+  destAsset,
+  destMin,
+  path,
+}: {
+  fromPublicKey: string;
+  toPublicKey: string;
+  sendAsset: Asset;
+  sendAmount: string;
+  destAsset: Asset;
+  destMin: string;
+  path: Asset[];
+}): Promise<Transaction> {
+  const sourceAccount = await server.loadAccount(fromPublicKey);
+  return new TransactionBuilder(sourceAccount, {
+    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      Operation.pathPaymentStrictSend({
+        sendAsset,
+        sendAmount,
+        destination: toPublicKey,
+        destAsset,
+        destMin,
+        path,
+      })
+    )
+    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
+    .build();
+}
+
 /**
  * Fetches general network statistics from Horizon.
  */
