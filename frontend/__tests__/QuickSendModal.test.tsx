@@ -82,9 +82,7 @@ describe("QuickSendModal", () => {
     const onClose = jest.fn();
     render(<QuickSendModal {...DEFAULT_PROPS} onClose={onClose} />);
 
-    // The backdrop is the dialog element itself (overlayRef)
-    const dialog = screen.getByRole("dialog");
-    await user.click(dialog);
+    await user.click(screen.getByTestId("modal-backdrop"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

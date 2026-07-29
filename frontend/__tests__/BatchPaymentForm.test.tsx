@@ -23,8 +23,8 @@ jest.mock("@/lib/wallet", () => ({
   ),
 }));
 
-const OWN_KEY   = "GOWN1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567";
-const VALID_ADDR = "GDEST234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567";
+const OWN_KEY    = "GOWN1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234";
+const VALID_ADDR = "GDEST234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234";
 
 const defaultProps = {
   publicKey: OWN_KEY,
@@ -136,6 +136,124 @@ describe("BatchPaymentForm", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Amount must be greater than 0/i)).toBeInTheDocument();
+    });
+  });
+
+  // ── CSV import (#616) ──────────────────────────────────────────────────────
+
+  describe("CSV import", () => {
+    const SECOND_ADDR = "GSECOND34567890ABCDEF1234567890ABCDEF1234567890ABCDEF123";
+
+    function csvFile(contents: string, name = "recipients.csv") {
+      return new File([contents], name, { type: "text/csv" });
+    }
+
+    function getImportInput() {
+      return screen.getByLabelText(/Import recipients from CSV/i) as HTMLInputElement;
+    }
+
+    it("populates recipient rows from address, amount and memo columns", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      await user.upload(
+        getImportInput(),
+        csvFile(
+          `address,amount,memo\n${VALID_ADDR},2.5,Rent\n${SECOND_ADDR},7.5,Salary\n`
+        )
+      );
+
+      await waitFor(() => {
+        expect(screen.getAllByPlaceholderText("G...")).toHaveLength(2);
+      });
+
+      const addressInputs = screen.getAllByPlaceholderText("G...");
+      expect(addressInputs[0]).toHaveValue(VALID_ADDR);
+      expect(addressInputs[1]).toHaveValue(SECOND_ADDR);
+
+      const amountInputs = screen.getAllByPlaceholderText("0.5");
+      expect(amountInputs[0]).toHaveValue(2.5);
+      expect(amountInputs[1]).toHaveValue(7.5);
+
+      const memoInputs = screen.getAllByPlaceholderText("Payment note");
+      expect(memoInputs[0]).toHaveValue("Rent");
+      expect(memoInputs[1]).toHaveValue("Salary");
+
+      expect(screen.getByText(/10\.0000000 XLM/)).toBeInTheDocument();
+      expect(screen.getByText(/Imported 2 recipients/i)).toBeInTheDocument();
+    });
+
+    it("imports headerless CSV files positionally", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      await user.upload(getImportInput(), csvFile(`${VALID_ADDR},1.25,Coffee\n`));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("G...")).toHaveValue(VALID_ADDR);
+      });
+      expect(screen.getByPlaceholderText("0.5")).toHaveValue(1.25);
+    });
+
+    it("flags malformed rows without discarding the valid ones", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      await user.upload(
+        getImportInput(),
+        csvFile(
+          `address,amount,memo\n${VALID_ADDR},2,Good row\nNOT_AN_ADDRESS,1,Bad address\n${SECOND_ADDR},abc,Bad amount\n`
+        )
+      );
+
+      await waitFor(() => {
+        expect(screen.getAllByPlaceholderText("G...")).toHaveLength(3);
+      });
+
+      expect(screen.getByText(/Invalid Stellar address/i)).toBeInTheDocument();
+      expect(screen.getByText(/Amount must be a number greater than 0/i)).toBeInTheDocument();
+      expect(screen.getByText(/2 rows need attention/i)).toBeInTheDocument();
+
+      // The single valid row is still importable and enables submission
+      expect(screen.getByRole("button", { name: /Send batch/i })).not.toBeDisabled();
+    });
+
+    it("flags a row that pays the connected wallet itself", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      await user.upload(getImportInput(), csvFile(`${OWN_KEY},1,Self\n`));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Recipient address cannot be the same as your wallet/i)
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("keeps at most the maximum number of recipients and says so", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      const rows = Array.from({ length: 12 }, () => `${VALID_ADDR},1,`).join("\n");
+      await user.upload(getImportInput(), csvFile(rows));
+
+      await waitFor(() => {
+        expect(screen.getAllByPlaceholderText("G...")).toHaveLength(10);
+      });
+      expect(screen.getByText(/2 extra rows skipped/i)).toBeInTheDocument();
+    });
+
+    it("reports an empty CSV instead of clearing the form", async () => {
+      const user = userEvent.setup();
+      render(<BatchPaymentForm {...defaultProps} />);
+
+      await user.upload(getImportInput(), csvFile("\n"));
+
+      await waitFor(() => {
+        expect(screen.getByText(/No recipients found in that CSV file/i)).toBeInTheDocument();
+      });
+      expect(screen.getAllByPlaceholderText("G...")).toHaveLength(1);
     });
   });
 
