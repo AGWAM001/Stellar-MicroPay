@@ -3,7 +3,7 @@
  * Displays paginated payment history for a Stellar account.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useRouter } from "next/router";
 import type { FixedSizeList, ListOnItemsRenderedProps } from "react-window";
 import { withErrorBoundary } from "@/components/ErrorBoundary";
@@ -23,9 +23,153 @@ import {
   ArrowDownIcon,
   RefreshIcon,
   ExternalLinkIcon,
-  PrinterIcon,
 } from "@/components/icons";
 import clsx from "clsx";
+
+/** @internal Incremented only in test to assert memo bail-outs. */
+export let __transactionRowRenderCount = 0;
+export function __resetTransactionRowRenderCount() {
+  __transactionRowRenderCount = 0;
+}
+
+export interface TransactionRowProps {
+  tx: PaymentRecord;
+  index: number;
+  isFocused: boolean;
+  isCopied: boolean;
+  onCopy: (text: string, id: string) => void;
+  onSaveContact: (address: string) => void;
+  onSendAgain: (to: string, amount: string) => void;
+  onFocusRow: (index: number) => void;
+  onBlurRow: () => void;
+  onNavigate: (direction: "up" | "down") => void;
+}
+
+export const TransactionRow = memo(function TransactionRow({
+  tx,
+  index,
+  isFocused,
+  isCopied,
+  onCopy,
+  onSaveContact,
+  onSendAgain,
+  onFocusRow,
+  onBlurRow,
+  onNavigate,
+}: TransactionRowProps) {
+  if (process.env.NODE_ENV === "test") {
+    __transactionRowRenderCount += 1;
+  }
+
+  const counterparty = tx.type === "sent" ? tx.to : tx.from;
+
+  return (
+    <div
+      role="listitem"
+      tabIndex={isFocused ? 0 : -1}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          onNavigate("down");
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          onNavigate("up");
+        } else if (e.key === "Enter" && isFocused) {
+          e.preventDefault();
+          onCopy(counterparty, tx.id);
+        }
+      }}
+      onBlur={onBlurRow}
+      onFocus={() => onFocusRow(index)}
+      className={clsx(
+        "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
+        isFocused && "outline-none ring-2 ring-stellar-500 ring-offset-2"
+      )}
+      aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${counterparty}`}
+    >
+      <div
+        className={clsx(
+          "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
+          tx.type === "sent"
+            ? "bg-red-500/10 border border-red-500/20"
+            : "bg-emerald-500/10 border border-emerald-500/20"
+        )}
+      >
+        {tx.type === "sent" ? (
+          <ArrowUpIcon className="w-4 h-4 text-red-400" />
+        ) : (
+          <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-200 capitalize">
+            {tx.type === "sent" ? "Sent to" : "Received from"}
+          </span>
+          <button
+            onClick={() => onCopy(counterparty, tx.id)}
+            aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
+            className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
+          >
+            {isCopied ? "Copied!" : shortenAddress(counterparty, 5)}
+          </button>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-slate-400">{timeAgo(tx.createdAt)}</span>
+          {tx.memo && (
+            <span className="text-xs text-slate-600 truncate max-w-32">
+              · &ldquo;{tx.memo}&rdquo;
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span
+          className={clsx(
+            "text-sm font-mono font-medium",
+            tx.type === "sent" ? "text-red-400" : "text-emerald-400"
+          )}
+        >
+          {tx.type === "sent" ? "-" : "+"}
+          {formatAsset(tx.amount, tx.asset)}
+        </span>
+
+        <button
+          onClick={() => onSaveContact(counterparty)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+          title="Save this address to contacts"
+          aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
+        >
+          Save contact
+        </button>
+
+        {tx.type === "sent" && (
+          <button
+            onClick={() => onSendAgain(tx.to, tx.amount)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
+            title="Pre-fill send form with this transaction"
+            aria-label="Send again to this recipient"
+          >
+            Send again
+          </button>
+        )}
+
+        <a
+          href={explorerUrl(tx.transactionHash) ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
+          title="View on Stellar Expert"
+          aria-label="View transaction on Stellar Expert"
+        >
+          <ExternalLinkIcon className="w-3.5 h-3.5" />
+        </a>
+      </div>
+    </div>
+  );
+});
 
 // Rows render virtualized past this count so long payment histories stay cheap to render.
 const VIRTUALIZE_THRESHOLD = 100;
@@ -281,13 +425,13 @@ function TransactionList({
 
   const handleLoadMore = () => fetchPayments(true);
 
-  const handleCopy = async (text: string, id: string) => {
+  const handleCopy = useCallback(async (text: string, id: string) => {
     await copyToClipboard(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  };
+  }, []);
 
-  const handleSaveContact = (address: string) => {
+  const handleSaveContact = useCallback((address: string) => {
     const existing = loadAddressBookContacts().find((contact) => contact.address === address);
     const nickname = window.prompt(
       existing ? "Update contact nickname:" : "Nickname for this contact:",
@@ -296,7 +440,35 @@ function TransactionList({
 
     if (!nickname) return;
     upsertAddressBookContact({ nickname, address });
-  };
+  }, []);
+
+  const handleSendAgain = useCallback(
+    (to: string, amount: string) => {
+      router.push(
+        `/dashboard?to=${encodeURIComponent(to)}&amount=${encodeURIComponent(amount)}`
+      );
+    },
+    [router]
+  );
+
+  const handleFocusRow = useCallback((index: number) => {
+    setFocusedIndex(index);
+  }, []);
+
+  const handleBlurRow = useCallback(() => {
+    setFocusedIndex(-1);
+  }, []);
+
+  const handleNavigate = useCallback(
+    (direction: "up" | "down") => {
+      setFocusedIndex((prev) =>
+        direction === "down"
+          ? Math.min(prev + 1, visiblePayments.length - 1)
+          : Math.max(prev - 1, 0)
+      );
+    },
+    [visiblePayments.length]
+  );
 
   // When virtualized, "Load more" / infinite scroll can't rely on a DOM
   // sentinel below the list (react-window scrolls its own inner viewport),
@@ -336,129 +508,31 @@ function TransactionList({
   const hasActiveFilters =
     filters.direction !== "all" || filters.minAmount.trim() !== "" || filters.memoSearch.trim() !== "";
 
-  const renderPaymentRow = (tx: PaymentRecord, index: number) => (
-    <div
-      role="listitem"
-      tabIndex={focusedIndex === index ? 0 : -1}
-      onKeyDown={(e) => {
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setFocusedIndex((prev) => Math.min(prev + 1, visiblePayments.length - 1));
-        } else if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setFocusedIndex((prev) => Math.max(prev - 1, 0));
-        } else if (e.key === "Enter" && focusedIndex === index) {
-          e.preventDefault();
-          const address = tx.type === "sent" ? tx.to : tx.from;
-          copyToClipboard(address);
-          setCopiedId(tx.id);
-          setTimeout(() => setCopiedId(null), 2000);
-        }
-      }}
-      onBlur={() => setFocusedIndex(-1)}
-      onFocus={() => setFocusedIndex(index)}
-      className={clsx(
-        "flex items-center gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group relative",
-        focusedIndex === index && "outline-none ring-2 ring-stellar-500 ring-offset-2"
-      )}
-      aria-label={`${tx.type === "sent" ? "Sent" : "Received"} ${formatAsset(tx.amount, tx.asset)} ${tx.type === "sent" ? "to" : "from"} ${tx.type === "sent" ? tx.to : tx.from}`}
-    >
-      {/* Direction icon */}
-      <div
-        className={clsx(
-          "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-          tx.type === "sent"
-            ? "bg-red-500/10 border border-red-500/20"
-            : "bg-emerald-500/10 border border-emerald-500/20"
-        )}
-      >
-        {tx.type === "sent" ? (
-          <ArrowUpIcon className="w-4 h-4 text-red-400" />
-        ) : (
-          <ArrowDownIcon className="w-4 h-4 text-emerald-400" />
-        )}
-      </div>
-
-      {/* Details */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-200 capitalize">
-            {tx.type === "sent" ? "Sent to" : "Received from"}
-          </span>
-          <button
-            onClick={() =>
-              handleCopy(
-                tx.type === "sent" ? tx.to : tx.from,
-                tx.id
-              )
-            }
-            aria-label={`Copy ${tx.type === "sent" ? "recipient" : "sender"} address`}
-            className="address-pill hover:border-stellar-500/40 transition-colors text-xs"
-          >
-            {copiedId === tx.id
-              ? "Copied!"
-              : shortenAddress(tx.type === "sent" ? tx.to : tx.from, 5)}
-          </button>
-        </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-xs text-slate-400">
-            {timeAgo(tx.createdAt)}
-          </span>
-          {tx.memo && (
-            <span className="text-xs text-slate-600 truncate max-w-32">
-              · &ldquo;{tx.memo}&rdquo;
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Amount + link */}
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <span
-          className={clsx(
-            "text-sm font-mono font-medium",
-            tx.type === "sent" ? "text-red-400" : "text-emerald-400"
-          )}
-        >
-          {tx.type === "sent" ? "-" : "+"}
-          {formatAsset(tx.amount, tx.asset)}
-        </span>
-
-        <button
-          onClick={() => handleSaveContact(tx.type === "sent" ? tx.to : tx.from)}
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-          title="Save this address to contacts"
-          aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
-        >
-          Save contact
-        </button>
-
-        {/* Send Again — only for sent transactions */}
-        {tx.type === "sent" && (
-          <button
-            onClick={() =>
-              router.push(`/dashboard?to=${encodeURIComponent(tx.to)}&amount=${encodeURIComponent(tx.amount)}`)
-            }
-            className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-stellar-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-            title="Pre-fill send form with this transaction"
-            aria-label="Send again to this recipient"
-          >
-            Send again
-          </button>
-        )}
-
-        <a
-          href={explorerUrl(tx.transactionHash) ?? undefined}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
-          title="View on Stellar Expert"
-          aria-label="View transaction on Stellar Expert"
-        >
-          <ExternalLinkIcon className="w-3.5 h-3.5" />
-        </a>
-      </div>
-    </div>
+  const renderPaymentRow = useCallback(
+    (tx: PaymentRecord, index: number) => (
+      <TransactionRow
+        tx={tx}
+        index={index}
+        isFocused={focusedIndex === index}
+        isCopied={copiedId === tx.id}
+        onCopy={handleCopy}
+        onSaveContact={handleSaveContact}
+        onSendAgain={handleSendAgain}
+        onFocusRow={handleFocusRow}
+        onBlurRow={handleBlurRow}
+        onNavigate={handleNavigate}
+      />
+    ),
+    [
+      focusedIndex,
+      copiedId,
+      handleCopy,
+      handleSaveContact,
+      handleSendAgain,
+      handleFocusRow,
+      handleBlurRow,
+      handleNavigate,
+    ]
   );
 
   if (loading) {
