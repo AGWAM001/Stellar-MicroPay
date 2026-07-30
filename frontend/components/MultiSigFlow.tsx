@@ -51,6 +51,14 @@ interface MultiSigFlowProps {
   onSuccess?: () => void;
   /** Optional array of co-signer public keys for reminder tracking */
   cosigners?: string[];
+  /** Initial wizard step (defaults to "build"). Useful for Storybook previews. */
+  defaultStep?: Step;
+  /** Initial required signature threshold (defaults to 2). */
+  defaultThreshold?: number;
+  /** Initial initiator signed XDR for collect/submit previews. */
+  defaultInitiatorSignedXDR?: string | null;
+  /** Initial co-signer signed XDRs for collect/submit previews. */
+  defaultCosignerXDRs?: string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -79,19 +87,25 @@ export default function MultiSigFlow({
   prefill,
   onSuccess,
   cosigners = [],
+  defaultStep = "build",
+  defaultThreshold = 2,
+  defaultInitiatorSignedXDR = null,
+  defaultCosignerXDRs = [],
 }: MultiSigFlowProps) {
-  const [step, setStep] = useState<Step>("build");
+  const [step, setStep] = useState<Step>(defaultStep);
 
   // Build step
   const [destination, setDestination] = useState(prefill?.destination ?? "");
   const [amount, setAmount] = useState(prefill?.amount ?? "");
   const [memo, setMemo] = useState(prefill?.memo ?? "");
-  const [threshold, setThreshold] = useState(2);
+  const [threshold, setThreshold] = useState(defaultThreshold);
 
   // Transaction state
   const [unsignedXDR, setUnsignedXDR] = useState<string | null>(null);
-  const [initiatorSignedXDR, setInitiatorSignedXDR] = useState<string | null>(null);
-  const [cosignerXDRs, setCosignerXDRs] = useState<string[]>([]);
+  const [initiatorSignedXDR, setInitiatorSignedXDR] = useState<string | null>(
+    defaultInitiatorSignedXDR
+  );
+  const [cosignerXDRs, setCosignerXDRs] = useState<string[]>(defaultCosignerXDRs);
   const [pastedXDR, setPastedXDR] = useState("");
 
   // UI state
