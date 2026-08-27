@@ -50,8 +50,14 @@ function startMonitoring(publicKey) {
             ? "native"
             : `${record.asset_code}:${record.asset_issuer}`;
 
+        const network = HORIZON_URL.includes("testnet") ? "testnet" : "mainnet";
+        
         /** @type {import('./webhookDelivery').PaymentPayload} */
         const payload = {
+          eventId: record.id,
+          attempt: 1,
+          createdAt: new Date().toISOString(),
+          network,
           event: "payment_received",
           publicKey,
           amount: record.amount,

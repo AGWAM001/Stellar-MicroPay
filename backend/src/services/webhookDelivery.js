@@ -20,6 +20,10 @@ const { generateWebhookSignature } = require("../utils/webhookSignature");
 
 /**
  * @typedef {Object} PaymentPayload
+ * @property {string} eventId
+ * @property {number} attempt
+ * @property {string} createdAt
+ * @property {string} network
  * @property {'payment_received'} event
  * @property {string} publicKey
  * @property {string} amount
