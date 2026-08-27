@@ -62,6 +62,41 @@ jest.mock("@/components/MultiSigFlow", () => ({
   MULTISIG_THRESHOLD_XLM: 1000,
 }));
 
+jest.mock("@/components/ErrorBoundary", () => ({
+  withErrorBoundary: (Component: React.FC) => Component,
+}));
+
+jest.mock("@/lib/addressBook", () => ({
+  loadAddressBookContacts: () => [],
+  saveAddressBookContacts: jest.fn(),
+  subscribeToAddressBookContacts: () => () => {},
+  upsertAddressBookContact: (c: unknown) => c,
+}));
+
+jest.mock("@/components/icons", () => {
+  const Icon = () => null;
+  return {
+    SendIcon: Icon,
+    CheckIcon: Icon,
+    CopyIcon: Icon,
+    ExternalLinkIcon: Icon,
+    StarIcon: Icon,
+    QrCodeIcon: Icon,
+    ReceiptIcon: Icon,
+  };
+});
+
+jest.mock("@/lib/ToastContext", () => ({
+  useToastContext: () => ({ addToast: jest.fn() }),
+}));
+
+jest.mock("@/lib/i18n", () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: Record<string, unknown>) =>
+      opts ? `${key}:${JSON.stringify(opts)}` : key,
+  }),
+}));
+
 import SendPaymentForm from "../components/SendPaymentForm";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -163,7 +198,7 @@ describe("SendPaymentForm — SNS integration", () => {
       render(<SendPaymentForm {...defaultProps} />);
 
       const input = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
+      const amountInput = screen.getByPlaceholderText("amount_placeholder");
       await user.type(input, "alice.xlm");
       await user.type(amountInput, "5");
 
@@ -183,7 +218,7 @@ describe("SendPaymentForm — SNS integration", () => {
       render(<SendPaymentForm {...defaultProps} />);
 
       const input = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
+      const amountInput = screen.getByPlaceholderText("amount_placeholder");
       await user.type(input, "bad.xlm");
       await user.type(amountInput, "5");
 
@@ -245,7 +280,7 @@ describe("SendPaymentForm — SNS integration", () => {
       render(<SendPaymentForm {...defaultProps} />);
 
       const input = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
+      const amountInput = screen.getByPlaceholderText("amount_placeholder");
 
       await user.type(input, "alice.xlm");
       act(() => { jest.advanceTimersByTime(500); });
@@ -263,7 +298,7 @@ describe("SendPaymentForm — SNS integration", () => {
 
       await user.click(screen.getByRole("button", { name: /Send/i }));
 
-      const confirmButton = await screen.findByRole("button", { name: /Confirm & Sign/i });
+      const confirmButton = await screen.findByRole("button", { name: /confirm_sign/i });
       await user.click(confirmButton);
 
       await waitFor(() => {

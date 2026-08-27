@@ -52,8 +52,6 @@ import {
 import clsx from "clsx";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import { useEffect, useRef, useState } from "react";
 import { useToastContext } from "@/lib/ToastContext";
 import { useTranslation } from "@/lib/i18n";
 
@@ -151,6 +149,7 @@ function SendPaymentForm({
   const [snsResolving, setSnsResolving] = useState(false);
   const [snsResolved, setSnsResolved] = useState<string | null>(null);
   const [snsError, setSnsError] = useState<string | null>(null);
+  const [snsResolvedAddress, setSnsResolvedAddress] = useState<string | null>(null);
   const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [customAsset, setCustomAsset] = useState<CustomAsset>({ code: "", issuer: "" });
   const [showCustomAssetForm, setShowCustomAssetForm] = useState(false);
@@ -180,7 +179,8 @@ function SendPaymentForm({
   const frameRequestRef = useRef<number | null>(null);
   const isDetectingRef = useRef(false);
   const destinationInputRef = useRef<HTMLInputElement | null>(null);
-  const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destinationValidationRequestRef = useRef(0);
 
   // Power-user shortcut: press "S" (when not already typing in a field and no
   // modal is open) to jump focus to the destination input (#264).
@@ -412,34 +412,28 @@ function SendPaymentForm({
   }, [destination]);
 
   // Pre-validate destination account existence on the Stellar network (#294)
-  useEffect(() => {
-    if (!isValidStellarAddress(destination)) {
-      setDestAccountWarning(null);
-      setIsCheckingDest(false);
-      return;
-    }
+  const validateDestinationAccount = useCallback(async (dest: string) => {
+    const requestId = destinationValidationRequestRef.current;
+    if (!isValidStellarAddress(dest)) return;
 
     setIsCheckingDest(true);
     setDestAccountWarning(null);
-    server.loadAccount(trimmedAddress)
-      .then(() => {
-        if (destinationValidationRequestRef.current === requestId) setDestAccountWarning(null);
-      })
-      .catch(() => {
-        if (destinationValidationRequestRef.current === requestId) {
-          setDestAccountWarning(
-            selectedAsset === "XLM"
-              ? "This account doesn't exist yet. Sending ≥ 1 XLM will create it."
-              : "This account doesn't exist on the Stellar network."
-          );
-        }
-      })
-      .finally(() => {
-        if (destinationValidationRequestRef.current === requestId) setIsCheckingDest(false);
-      });
+    try {
+      await server.loadAccount(dest);
+      if (destinationValidationRequestRef.current === requestId) setDestAccountWarning(null);
+    } catch {
+      if (destinationValidationRequestRef.current === requestId) {
+        setDestAccountWarning(
+          selectedAsset === "XLM"
+            ? "This account doesn't exist yet. Sending ≥ 1 XLM will create it."
+            : "This account doesn't exist on the Stellar network."
+        );
+      }
+    } finally {
+      if (destinationValidationRequestRef.current === requestId) setIsCheckingDest(false);
+    }
   }, [selectedAsset]);
 
-  // Pre-validate destination account existence on the Stellar network (#294)
   useEffect(() => {
     if (destinationValidationTimeoutRef.current) {
       clearTimeout(destinationValidationTimeoutRef.current);
@@ -502,7 +496,7 @@ function SendPaymentForm({
   const isMemoValid = memoBytes <= 28;
   
   const canSubmit =
-    (isValidDest || isFederationDestination || isUsernameDestination || (isStellarName(trimmedDestination) && !!snsResolved)) &&
+    (isValidDest || isFederationDestination || isUsernameDestination || (isStellarName(trimmedDestination) && (!!snsResolved || !!snsResolvedAddress))) &&
     !isResolvingDestination &&
     !snsResolving &&
     !snsError &&
@@ -994,14 +988,14 @@ function SendPaymentForm({
 
             {/* SNS resolution feedback */}
             {snsResolving && (
-              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-400">
-                <div className="w-3 h-3 border border-stellar-400 border-t-transparent rounded-full animate-spin" />
-                Resolving…
+              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400" aria-live="polite" aria-label="Resolving name">
+                <div className="h-3 w-3 animate-spin rounded-full border border-stellar-400 border-t-transparent" />
+                <span>Resolving name…</span>
               </div>
             )}
-            {!snsResolving && snsResolved && (
-              <p className="mt-1.5 text-xs text-slate-400">
-                Resolves to: <span className="font-mono text-stellar-300">{snsResolved}</span> ✓
+            {!snsResolving && (snsResolvedAddress || snsResolved) && (
+              <p className="mt-2 text-xs text-emerald-400" aria-live="polite">
+                Resolves to: <span className="font-mono">{snsResolvedAddress || snsResolved}</span>
               </p>
             )}
             {!snsResolving && snsError && (
@@ -1012,18 +1006,7 @@ function SendPaymentForm({
               <p className="mt-2 text-xs text-red-400">{destinationResolutionError}</p>
             )}
 
-            {/* SNS resolution feedback */}
-            {snsResolving && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400" aria-live="polite" aria-label="Resolving name">
-                <div className="h-3 w-3 animate-spin rounded-full border border-stellar-400 border-t-transparent" />
-                <span>Resolving name…</span>
-              </div>
-            )}
-            {!snsResolving && snsResolvedAddress && (
-              <p className="mt-2 text-xs text-emerald-400" aria-live="polite">
-                Resolves to: <span className="font-mono">{snsResolvedAddress}</span>
-              </p>
-            )}
+
 
             {/* Destination account existence warning (#294) */}
             {isCheckingDest && isValidDest && (
