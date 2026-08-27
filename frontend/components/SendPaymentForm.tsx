@@ -440,11 +440,16 @@ function SendPaymentForm({
     }
 
     if (!isValidStellarAddress(destination.trim())) {
+      // Bump the request counter so any in-flight validation is treated stale
       destinationValidationRequestRef.current += 1;
       setDestAccountWarning(null);
       setIsCheckingDest(false);
       return;
     }
+
+    // Bump the request counter before scheduling so that any previously
+    // in-flight validation is ignored when it resolves (#709).
+    destinationValidationRequestRef.current += 1;
 
     destinationValidationTimeoutRef.current = setTimeout(() => {
       validateDestinationAccount(destination);
@@ -753,6 +758,8 @@ function SendPaymentForm({
       clearTimeout(destinationValidationTimeoutRef.current);
       destinationValidationTimeoutRef.current = null;
     }
+    // Bump the counter so any in-flight debounced validation is treated stale.
+    destinationValidationRequestRef.current += 1;
     validateDestinationAccount(destination);
   };
 
