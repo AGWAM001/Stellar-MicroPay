@@ -153,8 +153,7 @@ function SendPaymentForm({
   const [resolvedPaymentDestination, setResolvedPaymentDestination] = useState<string | null>(null);
   // SNS-specific state: live resolution preview as the user types
   const [snsResolving, setSnsResolving] = useState(false);
-  const [snsResolved, setSnsResolved] = useState<string | null>(null);
-  const [snsError, setSnsError] = useState<string | null>(null);
+  const [snsResolvedAddress, setSnsResolvedAddress] = useState<string | null>(null);
   const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [customAsset, setCustomAsset] = useState<CustomAsset>({ code: "", issuer: "" });
   const [showCustomAssetForm, setShowCustomAssetForm] = useState(false);
@@ -533,10 +532,9 @@ function SendPaymentForm({
   const isMemoValid = memoBytes <= 28;
   
   const canSubmit =
-    (isValidDest || isFederationDestination || isUsernameDestination || (isStellarName(trimmedDestination) && !!snsResolved)) &&
+    (isValidDest || isFederationDestination || isUsernameDestination || (isStellarName(trimmedDestination) && !!snsResolvedAddress)) &&
     !isResolvingDestination &&
     !snsResolving &&
-    !snsError &&
     !destinationResolutionError &&
     isValidAmt &&
     status === "idle" &&
@@ -582,8 +580,8 @@ function SendPaymentForm({
     setIsResolvingDestination(true);
     try {
       // If we already resolved the SNS name in the preview, reuse it
-      if (isStellarName(trimmedDestination) && snsResolved) {
-        return snsResolved;
+      if (isStellarName(trimmedDestination) && snsResolvedAddress) {
+        return snsResolvedAddress;
       }
 
       if (isStellarName(trimmedDestination)) {
@@ -1069,15 +1067,6 @@ function SendPaymentForm({
                 Resolving…
               </div>
             )}
-            {!snsResolving && snsResolved && (
-              <p className="mt-1.5 text-xs text-slate-400">
-                Resolves to: <span className="font-mono text-stellar-300">{snsResolved}</span> ✓
-              </p>
-            )}
-            {!snsResolving && snsError && (
-              <p className="mt-1.5 text-xs text-red-400">{snsError}</p>
-            )}
-
             {destinationResolutionError && (
               <p className="mt-2 text-xs text-red-400">{destinationResolutionError}</p>
             )}
