@@ -1147,6 +1147,9 @@ mod benchmarks;
 mod fuzz_streams;
 
 #[cfg(test)]
+mod migration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::{
@@ -1862,16 +1865,19 @@ mod tests {
     #[test]
     fn test_claim_and_top_up_same_ledger() {
         let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) =
+        let (contract_id, client, token_id, payer, recipient1) =
             stream_fixture(&env, DEPOSIT * 2);
+        let recipient2 = Address::generate(&env);
         let token = token::Client::new(&env, &token_id);
 
         let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
 
         // Accrue some balance, then partially claim it.
         advance_by(&env, 10);
-        let first_claim = client.claim_stream(&id, &recipient);
-        assert_eq!(first_claim, RATE * 10);
+        let first_claim1 = client.claim_stream(&id, &recipient1);
+        let first_claim2 = client.claim_stream(&id, &recipient2);
+        assert_eq!(first_claim1, (RATE * 10) / 2);
+        assert_eq!(first_claim2, (RATE * 10) / 2);
 
         // top_up_stream happens in the very same ledger as the claim above —
         // no advance_by call between them.
@@ -1885,8 +1891,10 @@ mod tests {
         assert_eq!(client.get_claimable(&id, &recipient), 0);
 
         advance_by(&env, 5);
-        let second_claim = client.claim_stream(&id, &recipient);
-        assert_eq!(second_claim, RATE * 5);
+        let second_claim1 = client.claim_stream(&id, &recipient1);
+        let second_claim2 = client.claim_stream(&id, &recipient2);
+        assert_eq!(second_claim1, (RATE * 5) / 2);
+        assert_eq!(second_claim2, (RATE * 5) / 2);
 
         let final_stream = client.get_stream(&id);
         assert_eq!(claimed_of(&final_stream), RATE * 15);
