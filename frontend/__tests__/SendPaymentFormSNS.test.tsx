@@ -16,6 +16,34 @@ import userEvent from "@testing-library/user-event";
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
+jest.mock("@/lib/i18n", () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: Record<string, unknown>) => {
+      const map: Record<string, string> = {
+        send_button: `Send ${opts?.amount || ""} ${opts?.asset || ""}`,
+        confirm_title: "Confirm Payment",
+        confirm_sign: "Confirm & Sign",
+        cancel: "Cancel",
+        destination: "Destination",
+        amount: "Amount",
+        memo_optional: "Memo (optional)",
+        processing: "Processing...",
+        checking_account: "Checking account...",
+        contacts: "Contacts",
+        close: "Close",
+        scan_qr: "Scan QR Code",
+        save_contact: "Save Contact",
+        remove_contact: "Remove Contact",
+        memo_limit: "Memo exceeds 28 bytes",
+        max: `Max ${opts?.amount || ""}`,
+        amount_placeholder: "0.0000000",
+        high_value_warning: "Consider using Multi-Signature for high-value payments.",
+      };
+      return map[key] ?? (opts ? `${key}:${JSON.stringify(opts)}` : key);
+    },
+  }),
+}));
+
 const mockResolveStellarName = jest.fn();
 const mockIsStellarName = jest.fn();
 
