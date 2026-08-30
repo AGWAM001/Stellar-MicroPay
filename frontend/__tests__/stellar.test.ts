@@ -10,9 +10,18 @@ import {
 const VALID_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 describe("Stellar helper", () => {
-  it("exposes transaction categories used by payment history", () => {
+  it("categories", () => {
     expect(TransactionCategory.Payment).toBe("Payment");
     expect(TransactionCategory.Merge).toBe("Merge");
+  });
+
+  it.each([
+    [0, "pending"],
+    [1, "claimable"],
+    [2, "claimed"],
+    [3, "cancelled"],
+  ])("maps %i to %s", (status, expected) => {
+    expect(resolveEscrowStatus({ status })).toBe(expected);
   });
 });
 
