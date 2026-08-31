@@ -37,6 +37,14 @@ export default function Navbar() {
     { href: "/network", label: t.nav.network },
     { href: "/settings", label: t.nav.settings },
   ];
+    { href: "/", label: t("home") },
+    { href: "/dashboard", label: t("dashboard") },
+    { href: "/trade", label: t("trade") },
+    { href: "/transactions", label: t("transactions") },
+    { href: "/network", label: t("network") },
+    { href: "/settings", label: t("settings") },
+  ];
+
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
   const config = getNetworkConfig();
