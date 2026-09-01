@@ -192,6 +192,11 @@ function SendPaymentForm({
   const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destinationValidationRequestRef = useRef(0);
 
+  // Destination validation refs (#709)
+  const destinationValidationRequestRef = useRef(0);
+  const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Power-user shortcut: press "S" (when not already typing in a field and no
   // modal is open) to jump focus to the destination input (#264).
   useEffect(() => {
@@ -418,24 +423,24 @@ function SendPaymentForm({
     // Only trigger for SNS/federation names — raw addresses and usernames are
     // handled elsewhere.
     if (!isStellarName(trimmed)) {
-      setSnsResolvedAddress(null);
+      setSnsResolved(null);
       setSnsResolving(false);
       return;
     }
 
     setSnsResolving(true);
-    setSnsResolvedAddress(null);
+    setSnsResolved(null);
     setDestinationResolutionError(null);
 
     snsDebounceRef.current = setTimeout(async () => {
       try {
         const resolved = await resolveStellarName(trimmed);
-        setSnsResolvedAddress(resolved);
+        setSnsResolved(resolved);
         setDestinationResolutionError(null);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Could not resolve name";
         setDestinationResolutionError(message);
-        setSnsResolvedAddress(null);
+        setSnsResolved(null);
       } finally {
         setSnsResolving(false);
       }
@@ -456,10 +461,19 @@ function SendPaymentForm({
   const validateDestinationAccount = useCallback((rawAddress: string) => {
     const trimmedAddress = rawAddress.trim();
     if (!isValidStellarAddress(trimmedAddress)) {
+  // Uses a monotonic request ID to ignore stale async responses.
+  const validateDestinationAccount = useCallback(
+    (dest: string) => {
+      const trimmed = dest.trim();
+      if (!isValidStellarAddress(trimmed)) {
+        setDestAccountWarning(null);
+        setIsCheckingDest(false);
+        return;
+      }
+
+      const thisRequest = ++destinationValidationRequestRef.current;
+      setIsCheckingDest(true);
       setDestAccountWarning(null);
-      setIsCheckingDest(false);
-      return;
-    }
 
     const requestId = (destinationValidationRequestRef.current += 1);
     setIsCheckingDest(true);
@@ -480,6 +494,33 @@ function SendPaymentForm({
     }
   }, [selectedAsset]);
 
+      server.loadAccount(trimmed)
+        .then(() => {
+          if (destinationValidationRequestRef.current === thisRequest) {
+            setDestAccountWarning(null);
+          }
+        })
+        .catch(() => {
+          if (destinationValidationRequestRef.current === thisRequest) {
+            setDestAccountWarning(
+              selectedAsset === "XLM"
+                ? "This account doesn't exist yet. Sending ≥ 1 XLM will create it."
+                : "This account doesn't exist on the Stellar network."
+            );
+          }
+        })
+        .finally(() => {
+          if (destinationValidationRequestRef.current === thisRequest) {
+            setIsCheckingDest(false);
+          }
+        });
+    },
+    [selectedAsset]
+  );
+
+  // Debounced destination account validation — fires 400ms after the user
+  // stops typing a valid Stellar address.  Ignores stale responses via
+  // destinationValidationRequestRef (#294, #709).
   useEffect(() => {
     if (destinationValidationTimeoutRef.current) {
       clearTimeout(destinationValidationTimeoutRef.current);
@@ -508,7 +549,7 @@ function SendPaymentForm({
         destinationValidationTimeoutRef.current = null;
       }
     };
-  }, [destination, validateDestinationAccount]);
+  }, [destination, selectedAsset, validateDestinationAccount]);
 
   const xlmBal = parseFloat(xlmBalance);
   const usdcBal = usdcBalance ? parseFloat(usdcBalance) : 0;
@@ -589,8 +630,8 @@ function SendPaymentForm({
 
     // If we already resolved a SNS name in the debounced effect, use that
     // result directly — never submit the raw name string.
-    if (isStellarName(trimmedDestination) && snsResolvedAddress) {
-      return snsResolvedAddress;
+    if (isStellarName(trimmedDestination) && snsResolved) {
+      return snsResolved;
     }
 
     setIsResolvingDestination(true);
@@ -639,7 +680,7 @@ function SendPaymentForm({
     setDestination(address);
     setDestinationResolutionError(null);
     setResolvedPaymentDestination(null);
-    setSnsResolvedAddress(null);
+    setSnsResolved(null);
     setIsContactsDropdownOpen(false);
   };
 
@@ -1031,7 +1072,7 @@ function SendPaymentForm({
                 setDestination(val);
                 setDestinationResolutionError(null);
                 setResolvedPaymentDestination(null);
-                setSnsResolvedAddress(null);
+                setSnsResolved(null);
                 setDestAccountWarning(null);
                 setIsContactsDropdownOpen(true);
               }}
@@ -1070,6 +1111,18 @@ function SendPaymentForm({
             )}
 
 
+            {/* SNS resolution feedback */}
+            {snsResolving && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400" aria-live="polite" aria-label="Resolving name">
+                <div className="h-3 w-3 animate-spin rounded-full border border-stellar-400 border-t-transparent" />
+                <span>Resolving name…</span>
+              </div>
+            )}
+            {!snsResolving && snsResolved && (
+              <p className="mt-2 text-xs text-emerald-400" aria-live="polite">
+                Resolves to: <span className="font-mono">{snsResolved}</span>
+              </p>
+            )}
 
             {/* Destination account existence warning (#294) */}
             {isCheckingDest && isValidDest && (
@@ -1199,7 +1252,7 @@ interface SendConfirmationModalProps {
   onConfirm: () => void;
 }
 
-function SendConfirmationModal({ isOpen, destination, amount, asset, memo, estimatedFee, onCancel, onConfirm }: SendConfirmationModalProps) {
+function SendConfirmationModal({ isOpen, destination, amount, asset, memo, estimatedFee, isTipOnChain, onCancel, onConfirm }: SendConfirmationModalProps) {
   const { t } = useTranslation("sendPayment");
   if (!isOpen) return null;
   const shortened = shortenAddress(destination, 8);

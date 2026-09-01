@@ -3,6 +3,45 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Define mocks before importing the component
+jest.mock("@/lib/i18n", () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: Record<string, unknown>) => {
+      const map: Record<string, string> = {
+        memo_optional: "Memo (optional)",
+        send_button: `Send ${opts?.amount || ""} ${opts?.asset || ""}`,
+        processing: "Processing...",
+        confirm_title: "Confirm Payment",
+        confirm_sign: "Confirm & Sign",
+        cancel: "Cancel",
+        destination: "Destination",
+        amount: "Amount",
+        to: "To",
+        estimated_fee: "Estimated Fee",
+        memo: "Memo",
+        send_another: "Send Another",
+        success_title: "Payment Sent!",
+        success_message: "Your payment has been processed successfully.",
+        transaction_hash: "Transaction Hash",
+        view_explorer: "View on Explorer",
+        mint_receipt: "Mint NFT Receipt",
+        minting_receipt: "Minting Receipt...",
+        mint_success: "Receipt minted successfully!",
+        max: `Max ${opts?.amount || ""}`,
+        amount_placeholder: "0.0000000",
+        contacts: "Contacts",
+        close: "Close",
+        checking_account: "Checking account...",
+        scan_qr: "Scan QR Code",
+        save_contact: "Save Contact",
+        remove_contact: "Remove Contact",
+        high_value_warning: "Consider using Multi-Signature for high-value payments.",
+        memo_limit: "Memo exceeds 28 bytes",
+      };
+      return map[key] ?? (opts ? `${key}:${JSON.stringify(opts)}` : key);
+    },
+  }),
+}));
+
 jest.mock("@/lib/stellar", () => ({
   buildPaymentTransaction: jest.fn(),
   buildSorobanTipTransaction: jest.fn(),
@@ -14,6 +53,7 @@ jest.mock("@/lib/stellar", () => ({
   isStellarName: jest.fn(() => false),
   resolveStellarName: jest.fn(),
   resolveFederationAddress: jest.fn(),
+  resolveStellarName: jest.fn(),
   submitTransaction: jest.fn(),
   fetchNetworkFeeStats: jest.fn(() => Promise.resolve({ baseFeeXlm: 0.00001, feeLevel: "normal" })),
   truncateMemoText: jest.fn((text: string) => text),
@@ -87,6 +127,7 @@ jest.mock("@/lib/i18n", () => ({
     t: (key: string, opts?: Record<string, unknown>) =>
       opts ? `${key}:${JSON.stringify(opts)}` : key,
   }),
+  withErrorBoundary: (Comp: React.ComponentType) => Comp,
 }));
 
 // Now import the component and get mock references
