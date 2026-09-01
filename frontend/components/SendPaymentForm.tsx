@@ -196,6 +196,7 @@ function SendPaymentForm({
   const destinationValidationRequestRef = useRef(0);
   const destinationValidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destinationValidationRequestRef = useRef<number>(0);
 
   // Power-user shortcut: press "S" (when not already typing in a field and no
   // modal is open) to jump focus to the destination input (#264).
@@ -1095,6 +1096,9 @@ function SendPaymentForm({
               <div className="mt-2 flex items-center gap-2 text-xs text-slate-400" aria-live="polite" aria-label="Resolving name">
                 <div className="h-3 w-3 animate-spin rounded-full border border-stellar-400 border-t-transparent" />
                 <span>Resolving name…</span>
+              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-400" aria-label="Resolving name" role="status">
+                <div className="w-3 h-3 border border-stellar-400 border-t-transparent rounded-full animate-spin" />
+                Resolving…
               </div>
             )}
             {!snsResolving && (snsResolvedAddress || snsResolved) && (

@@ -51,6 +51,7 @@ export default function Navbar() {
   const isMainnet = config.network === "mainnet";
   const networkLabel =
     config.network === "custom" ? "Custom" : isMainnet ? "Mainnet" : "Testnet";
+    config.network === "custom" ? "custom" : isMainnet ? "mainnet" : "testnet";
   const networkBadgeClassName =
     config.network === "custom"
       ? "border-purple-400/35 bg-purple-400/10 text-purple-300"
@@ -121,6 +122,7 @@ export default function Navbar() {
             </div>
             <span className="font-display font-semibold tracking-tight text-slate-900 dark:text-white">
               {"Stellar MicroPay"}
+              Stellar MicroPay
             </span>
           </Link>
 
