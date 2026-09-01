@@ -127,6 +127,13 @@ function validatePublicKey(publicKey) {
   }
 }
 
+/**
+ * Clear all registered usernames (for testing).
+ */
+function clear() {
+  usernameMap.clear();
+}
+
 module.exports = {
   registerUsername,
   resolveUsername,
@@ -134,4 +141,5 @@ module.exports = {
   removeUsername,
   validateUsername,
   validatePublicKey,
+  clear,
 };

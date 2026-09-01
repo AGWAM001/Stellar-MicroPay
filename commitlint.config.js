@@ -1,6 +1,7 @@
 module.exports = {
   extends: ['@commitlint/config-conventional'],
   rules: {
+    'subject-case': [2, 'never', ['upper-case']],
     'subject-case': [2, 'never', ['pascal-case', 'kebab-case']],
     'subject-empty': [2, 'never'],
     'subject-full-stop': [2, 'never', '.'],

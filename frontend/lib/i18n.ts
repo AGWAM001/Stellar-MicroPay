@@ -174,10 +174,37 @@ export function getLocaleDisplayName(locale: Locale): string {
 }
 
 /**
- * Check if locale is RTL (right-to-left)
+ * Check if locale is RTL right-to-left)
  * Currently all supported locales are LTR, but this prepares for future RTL support
  */
 export function isRTL(locale: Locale): boolean {
   const rtlLocales: Locale[] = [];
   return rtlLocales.includes(locale);
 }
+
+/**
+ * React hook for translations.
+ * Returns a `t` function that looks up keys in the current locale's translations.
+ */
+export function useTranslation(_namespace?: string) {
+  const locale = getStoredLocale();
+  const translations = getTranslations(locale);
+
+  const t = (key: string, opts?: Record<string, unknown>): string => {
+    const value = (translations as unknown as Record<string, unknown>)[key];
+    if (typeof value === 'string') {
+      if (opts) {
+        return Object.entries(opts).reduce(
+          (str, [k, v]) => str.replace(new RegExp(`\{${k}\}`, 'g'), String(v)),
+          value
+        );
+      }
+      return value;
+    }
+    return key;
+  };
+
+  return { t };
+}
+// Re-export the canonical translation hook from the I18n context
+export { useTranslation } from '../contexts/I18nContext';
