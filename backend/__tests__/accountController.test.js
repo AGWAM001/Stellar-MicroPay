@@ -13,6 +13,15 @@ function setupApp() {
   const app = express();
   app.use(express.json());
   
+  // Fake auth middleware that mirrors what the real auth layer does:
+  // it sets req.user.publicKey from the JWT-verified session.
+  app.use((req, _res, next) => {
+    // For register tests the caller passes publicKey in the body;
+    // use that so the wallet-ownership check passes.
+    req.user = { publicKey: req.body?.publicKey || req.params?.publicKey };
+    next();
+  });
+
   app.get("/api/accounts/resolve/:username", accountController.resolveUsername);
   app.get("/api/accounts/:publicKey/balance", accountController.getBalance);
   app.get("/api/accounts/:publicKey", accountController.getAccount);
@@ -109,6 +118,7 @@ describe("accountController", () => {
       
       expect(res.status).toBe(400);
       expect(res.body).toEqual({
+        success: false,
         error: "Username and public key are required"
       });
     });
